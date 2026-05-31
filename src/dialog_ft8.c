@@ -1085,6 +1085,9 @@ static void on_psd_cb(const float *psd, uint16_t nfft, float sec_since_slot_star
     if (high_bin > nfft) high_bin = nfft;
     if (low_bin >= high_bin) return;
 
+    /* Slot-boundary marker (before PSD data so it sits above the row). */
+    auto_dnf_draw_slot_marker(info, waterfall);
+
     lv_waterfall_add_data(waterfall, (float *)&psd[low_bin], (int32_t)(high_bin - low_bin));
 
     /* PSD hooks: slot markers, auto DNF notch detection, etc. */

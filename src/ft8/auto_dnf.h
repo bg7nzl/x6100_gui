@@ -32,6 +32,7 @@
 
 #include "lvgl/lvgl.h"
 
+#include "audio_worker.h"   /* slot_info_t */
 #include "params.h"
 
 #ifdef __cplusplus
@@ -82,6 +83,11 @@ void auto_dnf_register_hooks(void);
 
 /** Return the module's current auto_dnf context (created by init hook). */
 auto_dnf_ctx_t *auto_dnf_get_ctx(void);
+
+/** Draw a slot-boundary marker line on the waterfall if this is a new
+ *  slot (deduplicated via slot_start). Call before lv_waterfall_add_data
+ *  so the marker sits above the PSD row. */
+void auto_dnf_draw_slot_marker(const slot_info_t *info, lv_obj_t *waterfall);
 
 #ifdef __cplusplus
 }

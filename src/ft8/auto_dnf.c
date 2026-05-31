@@ -560,20 +560,10 @@ static void dnf_psd_hook(const float *psd, uint16_t nfft,
                          const slot_info_t *info) {
     if (!s_dnf_ctx || !info) return;
 
-    /* Slot-boundary marker line on the waterfall. */
-    lv_obj_t *wf = ft8_get_waterfall();
-    if (wf) {
-        int      proto   = subject_get_int(cfg.ft8_protocol.val);
-        uint64_t slot_ns = (proto == FTX_PROTOCOL_FT4) ? 7500000000ULL : 15000000000ULL;
-        uint64_t slot_id = ((uint64_t)info->slot_start * 1000000000ULL) / slot_ns;
-        if (slot_id != s_waterfall_slot_id) {
-            s_waterfall_slot_id = slot_id;
-            lv_waterfall_add_marker_line(wf, lv_color_hex(0xFF0000));
-        }
-    }
-
     /* Auto DNF: hand the full PSD to the detector with a frame timestamp
-     * synthesised from info->slot_start + sec_since_slot_start. */
+     * synthesised from info->slot_start + sec_since_slot_start.
+     * (Marker line is drawn in dialog_ft8.c on_psd_cb before
+     * lv_waterfall_add_data so it appears above the PSD row.) */
     struct timespec frame_ts;
     double frame_time = (double)info->slot_start + (double)sec_since_slot_start;
     frame_ts.tv_sec  = (time_t)frame_time;
@@ -590,6 +580,11 @@ static void dnf_psd_hook(const float *psd, uint16_t nfft,
                     filt_low, filt_high, frame_ts, is_our_tx_slot);
 }
 
+static void dnf_pre_tx_hook(const slot_info_t *info) {
+    (void)info;
+    if (s_dnf_ctx) auto_dnf_clear_for_tx(s_dnf_ctx);
+}
+
 void auto_dnf_register_hooks(void) {
     if (s_hooks_registered) return;
     s_hooks_registered = true;
@@ -597,8 +592,22 @@ void auto_dnf_register_hooks(void) {
     ft8_register_init_hook(dnf_init_hook);
     ft8_register_cleanup_hook(dnf_cleanup_hook);
     ft8_register_psd_hook(dnf_psd_hook);
+    ft8_register_pre_tx_hook(dnf_pre_tx_hook);
 }
 
 auto_dnf_ctx_t *auto_dnf_get_ctx(void) {
     return s_dnf_ctx;
+}
+
+void auto_dnf_draw_slot_marker(const slot_info_t *info, lv_obj_t *waterfall) {
+    if (!info || !waterfall) return;
+
+    int      proto   = subject_get_int(cfg.ft8_protocol.val);
+    uint64_t slot_ns = (proto == FTX_PROTOCOL_FT4) ? 7500000000ULL : 15000000000ULL;
+    uint64_t slot_id = ((uint64_t)info->slot_start * 1000000000ULL) / slot_ns;
+
+    if (slot_id != s_waterfall_slot_id) {
+        s_waterfall_slot_id = slot_id;
+        lv_waterfall_add_marker_line(waterfall, lv_color_hex(0xFF0000));
+    }
 }
