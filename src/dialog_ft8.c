@@ -30,6 +30,8 @@
 #include "recorder.h"
 #include "textarea_window.h"
 
+#include <ft8lib/message.h>
+
 #include "ft8/audio_worker.h"
 #include "ft8/cq_scheduler.h"
 #include "ft8/table_view.h"
@@ -65,6 +67,10 @@
 #define FT4_WIDTH_HZ    83
 
 #define MAX_TX_START_DELAY 1.5f
+
+#define FT8_FREETEXT_FILE        "/mnt/ft8_freetext.txt"
+#define FT8_FREETEXT_MAX_LEN     13
+#define FT8_FREETEXT_ACCEPTED_CHARS " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+-./?"
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(arr[0]))
 
@@ -185,6 +191,12 @@ static void add_info(const char * fmt, ...);
 static void add_tx_text(const char * text);
 static bool get_time_slot(struct timespec now, float *time_since_start);
 
+static void free_msg_cb(struct button_item_t *btn);
+static void free_msg_open(void);
+static void free_msg_close(void);
+static bool free_msg_cancel_cb(void);
+static bool free_msg_ok_cb(void);
+
 
 // button label is current state, press action and name - next state
 
@@ -203,6 +215,7 @@ static button_item_t button_page_2 = { .type=BTN_TEXT, .label = "(Page: 2:4)", .
 static button_item_t button_hold_freq = { .type=BTN_TEXT_FN, .label_fn = hold_freq_label_getter, .press = hold_tx_freq_cb, .subj=&cfg.ft8_hold_freq.val };
 static button_item_t button_auto_en_dis = { .type=BTN_TEXT_FN, .label_fn = auto_label_getter, .press = mode_auto_cb, .subj=&cfg.ft8_auto.val };
 static button_item_t button_force_save = { .type=BTN_TEXT, .label = "Force QSO\nsave", .press = force_save_qso };
+static button_item_t button_free_msg = { .type=BTN_TEXT, .label = "Free\nMSG", .press = free_msg_cb };
 
 static button_item_t button_page_3 = { .type=BTN_TEXT, .label = "(Page: 3:4)", .press = button_next_page_cb, .next=&btn_page_4};
 static button_item_t button_cq_mod = { .type=BTN_TEXT, .label = "CQ\nModifier", .press = cq_modifier_cb };
@@ -215,7 +228,7 @@ static buttons_page_t btn_page_1 = {
 };
 
 static buttons_page_t btn_page_2 = {
-    {&button_page_2, &button_hold_freq, &button_auto_en_dis, &button_force_save}
+    {&button_page_2, &button_hold_freq, &button_auto_en_dis, &button_force_save, &button_free_msg}
 };
 
 static buttons_page_t btn_page_3 = {
@@ -720,6 +733,7 @@ static void tx_cq_en_dis_cb(struct button_item_t *btn) {
         subject_set_int(tx_enabled, true);
 
         cq_make_message(params.callsign.x, params.qth.x, params.ft8_cq_modifier.x, tx_msg.msg);
+        tx_msg.force_free_text = false;
 
         struct timespec now;
         clock_gettime(CLOCK_REALTIME, &now);
@@ -1088,7 +1102,7 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
                 .tx_text             = tx_msg.msg,
                 .audio_sample_rate   = AUDIO_PLAY_RATE,
                 .base_gain_offset    = base_gain_offset,
-                .force_free_text     = false,
+                .force_free_text     = tx_msg.force_free_text,
                 .sec_since_slot_start = 0.0f,
                 .abort_check         = tx_should_abort_cb,
                 .abort_check_ctx     = NULL,
@@ -1137,6 +1151,171 @@ void ft8_register_button(const ft8_button_def_t *btn) {
     }
 }
 
+/* ---- Free MSG helpers (save/load/sanitize) --------------------------- */
+
+static void ft8_freetext_sanitize(const char *in, char *out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    out[0] = '\0';
+    if (!in) return;
+
+    size_t j = 0;
+    for (size_t i = 0; in[i] != '\0'; i++) {
+        char c = in[i];
+        if (c == '\n' || c == '\r') {
+            break;
+        }
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 'a' + 'A');
+        }
+        if (strchr(FT8_FREETEXT_ACCEPTED_CHARS, c) == NULL) {
+            continue;
+        }
+        if (j == 0 && c == ' ') {
+            continue;
+        }
+        if (j + 1 >= out_size) {
+            break;
+        }
+        if (j >= FT8_FREETEXT_MAX_LEN) {
+            break;
+        }
+        out[j++] = c;
+    }
+    while (j > 0 && out[j - 1] == ' ') {
+        j--;
+    }
+    out[j] = '\0';
+}
+
+static void ft8_freetext_load(char *out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    out[0] = '\0';
+
+    FILE *fp = fopen(FT8_FREETEXT_FILE, "r");
+    if (!fp) return;
+
+    char buf[128];
+    buf[0] = '\0';
+    if (fgets(buf, sizeof(buf), fp) == NULL) {
+        buf[0] = '\0';
+    }
+    fclose(fp);
+
+    ft8_freetext_sanitize(buf, out, out_size);
+}
+
+static bool ft8_freetext_save(const char *text) {
+    FILE *fp = fopen(FT8_FREETEXT_FILE, "w");
+    if (!fp) return false;
+    if (text && text[0] != '\0') {
+        fputs(text, fp);
+    }
+    fputc('\n', fp);
+    fclose(fp);
+    return true;
+}
+
+/* ---- Free MSG button / dialog ---------------------------------------- */
+
+static void free_msg_cb(struct button_item_t *btn) {
+    (void)btn;
+    free_msg_open();
+}
+
+static void free_msg_open(void) {
+    if (!table) {
+        return;
+    }
+
+    lv_group_remove_obj(table);
+    textarea_window_open_w_label(free_msg_ok_cb, free_msg_cancel_cb, "Free MSG");
+    lv_obj_t *text = textarea_window_text();
+
+    lv_textarea_set_one_line(text, true);
+    lv_textarea_set_max_length(text, FT8_FREETEXT_MAX_LEN);
+    lv_textarea_set_accepted_chars(text, FT8_FREETEXT_ACCEPTED_CHARS);
+
+    char def[FT8_FREETEXT_MAX_LEN + 1];
+    ft8_freetext_load(def, sizeof(def));
+    if (def[0] != '\0') {
+        textarea_window_set(def);
+    } else {
+        lv_textarea_set_placeholder_text(text, " FREE TEXT");
+    }
+    disable_buttons = true;
+}
+
+static void free_msg_close(void) {
+    textarea_window_close();
+    if (table) {
+        lv_group_add_obj(keyboard_group, table);
+        lv_group_set_editing(keyboard_group, true);
+    }
+    disable_buttons = false;
+}
+
+static bool free_msg_cancel_cb(void) {
+    free_msg_close();
+    return true;
+}
+
+static bool free_msg_ok_cb(void) {
+    const char *raw = textarea_window_get();
+    char clean[FT8_FREETEXT_MAX_LEN + 1];
+    ft8_freetext_sanitize(raw, clean, sizeof(clean));
+    if (clean[0] == '\0') {
+        msg_schedule_text_fmt("Empty Free MSG");
+        return false;
+    }
+
+    if (!ft8_freetext_save(clean)) {
+        msg_schedule_text_fmt("Save Free MSG failed");
+    }
+
+    if (!qso_processor) {
+        msg_schedule_text_fmt("FT8 not ready");
+        return false;
+    }
+
+    if (ftx_qso_processor_has_current(qso_processor)) {
+        msg_schedule_text_fmt("QSO active, cannot Free MSG");
+        return false;
+    }
+    if (tx_msg.msg[0] != '\0') {
+        msg_schedule_text_fmt("TX busy, cannot Free MSG");
+        return false;
+    }
+
+    /* Validate the free-text message fits in a 77-bit FT8 frame. */
+    {
+        ftx_message_t    tmp_msg;
+        ftx_message_rc_t rc = ftx_message_encode_free(&tmp_msg, clean);
+        if (rc != FTX_MESSAGE_RC_OK) {
+            msg_schedule_text_fmt("Free MSG too long for FT8");
+            return false;
+        }
+    }
+
+    strncpy(tx_msg.msg, clean, sizeof(tx_msg.msg) - 1);
+    tx_msg.msg[sizeof(tx_msg.msg) - 1] = '\0';
+    tx_msg.repeats = 1;
+    tx_msg.force_free_text = true;
+
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    float time_since_slot_start = 0.0f;
+    tx_time_slot = !get_time_slot(now, &time_since_slot_start);
+    if (time_since_slot_start < MAX_TX_START_DELAY) {
+        tx_time_slot = !tx_time_slot;
+    }
+
+    subject_set_int(tx_enabled, true);
+    msg_schedule_text_fmt("Next TX: %s", tx_msg.msg);
+
+    free_msg_close();
+    return true;
+}
+
 /* ---- Internal state getters for external modules ---------------------- */
 
 FTxQsoProcessor *ft8_get_qso_processor(void) { return qso_processor; }
@@ -1162,6 +1341,7 @@ void ft8_schedule_cq_tx(void) {
 
     cq_make_message(params.callsign.x, params.qth.x,
                     params.ft8_cq_modifier.x, tx_msg.msg);
+    tx_msg.force_free_text = false;
 
     struct timespec now;
     clock_gettime(CLOCK_REALTIME, &now);

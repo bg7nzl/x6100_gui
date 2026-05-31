@@ -55,12 +55,11 @@ bool tx_worker_run_with_config(const ft8_tx_config_t *tx_cfg) {
     float          sec_since_slot_start = tx_cfg->sec_since_slot_start;
     tx_abort_fn_t  abort_check         = tx_cfg->abort_check;
     void          *abort_check_ctx     = tx_cfg->abort_check_ctx;
-    (void)force_free_text;
     (void)sec_since_slot_start;
     int16_t *samples   = NULL;
     uint32_t n_samples = 0;
 
-    if (!ftx_worker_generate_tx_samples(tx_text, SIGNAL_FREQ_HZ,
+    if (!ftx_worker_generate_tx_samples(tx_text, force_free_text, SIGNAL_FREQ_HZ,
                                         (uint32_t)audio_sample_rate,
                                         &samples, &n_samples)) {
         return true; /* nothing to send; not an abort */
