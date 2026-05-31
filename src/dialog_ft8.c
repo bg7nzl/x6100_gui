@@ -64,7 +64,13 @@
 #define FT8_WIDTH_HZ    50
 #define FT4_WIDTH_HZ    83
 
-#define MAX_TX_START_DELAY 1.5f
+/* Per-protocol grace window: still arm TX if the slot is this many
+ * seconds in. FT8 was 1.5 historically but the burst is 12.64 s, so
+ * up to ~2.4 s late still fits before FT8_TX_END_SEC; allow 5.0 s and
+ * lean on tx_worker tail-align to crop the front. FT4 stays at 1.5
+ * since its burst is short and any larger margin would clip the tail. */
+#define MAX_TX_START_DELAY     5.0f
+#define MAX_TX_START_DELAY_FT4 1.5f
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(arr[0]))
 
@@ -725,7 +731,9 @@ static void tx_cq_en_dis_cb(struct button_item_t *btn) {
         clock_gettime(CLOCK_REALTIME, &now);
         float time_since_slot_start;
         tx_time_slot = !get_time_slot(now, &time_since_slot_start);
-        if (time_since_slot_start < MAX_TX_START_DELAY) {
+        float max_delay = (subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8)
+                          ? MAX_TX_START_DELAY : MAX_TX_START_DELAY_FT4;
+        if (time_since_slot_start < max_delay) {
             tx_time_slot = !tx_time_slot;
         }
 
@@ -1072,7 +1080,9 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
 
     bool have_tx_msg = tx_msg.msg[0] != '\0';
 
-    if ((sec_since_slot_start < MAX_TX_START_DELAY) && have_tx_msg) {
+    float tx_max_delay = (subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8)
+                         ? MAX_TX_START_DELAY : MAX_TX_START_DELAY_FT4;
+    if ((sec_since_slot_start < tx_max_delay) && have_tx_msg) {
         if ((tx_time_slot == info->odd) && subject_get_int(tx_enabled)) {
 
             /* ---- Pre-TX hooks (log, DNF clear, etc.) ---------------
@@ -1089,7 +1099,7 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
                 .audio_sample_rate   = AUDIO_PLAY_RATE,
                 .base_gain_offset    = base_gain_offset,
                 .force_free_text     = false,
-                .sec_since_slot_start = 0.0f,
+                .sec_since_slot_start = sec_since_slot_start,
                 .abort_check         = tx_should_abort_cb,
                 .abort_check_ctx     = NULL,
             };
@@ -1167,7 +1177,9 @@ void ft8_schedule_cq_tx(void) {
     clock_gettime(CLOCK_REALTIME, &now);
     float time_since_slot_start;
     tx_time_slot = !get_time_slot(now, &time_since_slot_start);
-    if (time_since_slot_start < MAX_TX_START_DELAY) {
+    float max_delay = (subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8)
+                      ? MAX_TX_START_DELAY : MAX_TX_START_DELAY_FT4;
+    if (time_since_slot_start < max_delay) {
         tx_time_slot = !tx_time_slot;
     }
     tx_msg.repeats = subject_get_int(cfg.ft8_max_repeats.val);
