@@ -8,6 +8,7 @@
 
 #include "dialog_ft8.h"
 #include "ft8/ft8_hooks.h"
+#include "ft8/ft8_log.h"
 
 #include "ft8/worker.h"
 #include "ft8/qso.h"
@@ -254,6 +255,9 @@ static void save_qso(const char *remote_callsign, const char *remote_grid, const
 
     // Save QSO to sqlite log
     qso_log_record_save(qso);
+
+    // Append QSO line to the per-session text log
+    ft8_log_qso(now, remote_callsign);
 
     if (strlen(remote_grid) >= 4) {
         double lat, lon, dist;
@@ -629,6 +633,10 @@ static void construct_cb(lv_obj_t *parent) {
     } else {
         base_gain_offset = -16.4f + log10f(target_pwr) * 10.0f;
     }
+
+    /* Register feature-module hooks before firing init hooks.
+     * Each call is idempotent (static bool guard). */
+    ft8_log_register_hooks();
 
     /* Run all registered init hooks after base setup is complete. */
     for (uint8_t i = 0; i < init_hook_cnt; i++)
@@ -1116,11 +1124,12 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
     if (new_slot) {
         state = RX_PROCESS;
         if (!have_tx_msg || !subject_get_int(tx_enabled)) {
-            struct timespec now;
-            clock_gettime(CLOCK_REALTIME, &now);
-            struct tm *ts = localtime(&now.tv_sec);
-            add_info("RX %s %02i:%02i:%02i", cfg_digital_label_get(),
-                     ts->tm_hour, ts->tm_min, ts->tm_sec);
+            struct tm tm_slot;
+            time_t    slot_start = (time_t)info->slot_start;
+            if (localtime_r(&slot_start, &tm_slot) != NULL) {
+                add_info("RX %s %02i:%02i:%02i", cfg_digital_label_get(),
+                         tm_slot.tm_hour, tm_slot.tm_min, tm_slot.tm_sec);
+            }
         }
     }
 }
