@@ -31,6 +31,7 @@
 #include "textarea_window.h"
 
 #include "ft8/audio_worker.h"
+#include "ft8/auto_sel.h"
 #include "ft8/cq_scheduler.h"
 #include "ft8/table_view.h"
 #include "ft8/tx_worker.h"
@@ -185,6 +186,9 @@ static void add_info(const char * fmt, ...);
 static void add_tx_text(const char * text);
 static bool get_time_slot(struct timespec now, float *time_since_start);
 
+static const char * auto_sel_label_getter(void);
+static void auto_sel_cb(struct button_item_t *btn);
+
 
 // button label is current state, press action and name - next state
 
@@ -207,6 +211,7 @@ static button_item_t button_force_save = { .type=BTN_TEXT, .label = "Force QSO\n
 static button_item_t button_page_3 = { .type=BTN_TEXT, .label = "(Page: 3:4)", .press = button_next_page_cb, .next=&btn_page_4};
 static button_item_t button_cq_mod = { .type=BTN_TEXT, .label = "CQ\nModifier", .press = cq_modifier_cb };
 static button_item_t button_time_sync = { .type=BTN_TEXT, .label = "Time\nSync", .press = time_sync };
+static button_item_t button_auto_sel = { .type=BTN_TEXT_FN, .label_fn = auto_sel_label_getter, .press = auto_sel_cb };
 
 static button_item_t button_page_4 = { .type=BTN_TEXT, .label = "(Page: 4:4)", .press = button_next_page_cb, .next=&btn_page_1};
 
@@ -219,7 +224,7 @@ static buttons_page_t btn_page_2 = {
 };
 
 static buttons_page_t btn_page_3 = {
-    {&button_page_3, &button_cq_mod, &button_time_sync}
+    {&button_page_3, &button_cq_mod, &button_time_sync, &button_auto_sel}
 };
 
 static buttons_page_t btn_page_4 = {
@@ -630,6 +635,10 @@ static void construct_cb(lv_obj_t *parent) {
         base_gain_offset = -16.4f + log10f(target_pwr) * 10.0f;
     }
 
+    /* Register feature-module hooks before firing init hooks.
+     * Each call is idempotent (static bool guard). */
+    autosel_register_hooks();
+
     /* Run all registered init hooks after base setup is complete. */
     for (uint8_t i = 0; i < init_hook_cnt; i++)
         init_hooks[i]();
@@ -671,6 +680,19 @@ const char *auto_label_getter() {
     static char buf[32];
     sprintf(buf, "Auto:\n%s", subject_get_int(cfg.ft8_auto.val) ? "Enabled": "Disabled");
     return buf;
+}
+
+const char *auto_sel_label_getter(void) {
+    static char buf[32];
+    snprintf(buf, sizeof(buf), "AutoSel:\n%s", autosel_get_mode_text());
+    return buf;
+}
+
+static void auto_sel_cb(struct button_item_t *btn) {
+    if (disable_buttons) return;
+    autosel_cycle_mode();
+    msg_schedule_text_fmt("Auto select: %s", autosel_get_mode_text());
+    buttons_refresh(btn);
 }
 
 static void show_cq_all_cb(struct button_item_t *btn) {
@@ -1079,6 +1101,7 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
              * [Module hook point] grid-swap / pre-TX logic that needs
              *   to modify tx_msg or defer this tick —
              *   see FT8_HOOK_PLAN.md §3.5.2 */
+            autosel_grid_swap_on_tick();
             for (uint8_t i = 0; i < pre_tx_hook_cnt; i++)
                 pre_tx_hooks[i](info);
 
@@ -1099,6 +1122,7 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
 
             /* [Module hook point] post-TX repeat/QSO exhaustion logic —
              *   see FT8_HOOK_PLAN.md §3.5.3 */
+            autosel_post_tx();
 
             if (tx_msg.repeats > 0) {
                 tx_msg.repeats--;
