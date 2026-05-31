@@ -382,6 +382,7 @@ extern "C" bool autosel_is_blacklisted(const char *call) {
 /* ---- Hook adapters and registration (PR-AUTOSEL) --------------------- */
 
 extern "C" {
+#include <complex.h>   /* for float complex used by audio_worker.h */
 #include "ft8_hooks.h"
 #include "../qth/qth.h"
 #include "../cfg/subjects.h"
