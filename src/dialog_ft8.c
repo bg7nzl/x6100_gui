@@ -987,6 +987,7 @@ static void add_rx_text(int16_t snr, const char * text, slot_info_t *s_info, flo
     ftx_qso_processor_add_rx_text(qso_processor, text, snr, meta, &tx_msg);
 
     if ((strlen(tx_msg.msg) > 0) && (strcmp(old_msg, tx_msg.msg) != 0)) {
+        tx_msg.force_free_text = false;
         lv_finder_set_cursor(finder, meta->freq_hz);
         if (!subject_get_int(cfg.ft8_hold_freq.val)) {
             set_freq(freq_hz);
