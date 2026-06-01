@@ -112,6 +112,15 @@ void autosel_post_tx(void);
  *  Tracks qso_active_call, cq_paused flag, clears exhaustion state. */
 void autosel_on_tx_msg_updated(const ftx_msg_meta_t *meta, bool odd_slot);
 
+/** Called from save_qso: resume CQ immediately if it was paused for
+ *  this QSO. Needed because slot_end can't do it (has_current() is
+ *  still true at save time). */
+void autosel_on_qso_saved(void);
+
+/** Called from mode_ft4_ft8_cb: reset autosel session state on
+ *  FT8/FT4 protocol switch. */
+void autosel_on_mode_switch(void);
+
 #ifdef __cplusplus
 }
 #endif

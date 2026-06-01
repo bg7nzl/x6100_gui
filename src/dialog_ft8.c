@@ -270,6 +270,7 @@ static void save_qso(const char *remote_callsign, const char *remote_grid, const
     }
 
     lv_finder_clear_cursor(finder);
+    autosel_on_qso_saved();
 }
 
 static void worker_init() {
@@ -712,6 +713,8 @@ static void mode_ft4_ft8_cb(struct button_item_t *btn) {
     subject_set_int(cfg.ft8_protocol.val, proto);
     subject_set_int(cq_enabled, false);
 
+    autosel_on_mode_switch();
+
     worker_done();
     worker_init();
     clean_screen();
@@ -1001,12 +1004,11 @@ static void add_rx_text(int16_t snr, const char * text, slot_info_t *s_info, flo
         }
         tx_time_slot = !s_info->odd;
         msg_schedule_text_fmt("Next TX: %s", tx_msg.msg);
-        if (subject_get_int(cq_enabled)) {
-            subject_set_int(cq_enabled, false);
-        }
-
         /* Notify AutoSel of TX message change (QSO partner tracking,
-         * CQ pause flag, exhaustion reset). */
+         * CQ pause flag, exhaustion reset). Autosel internally handles
+         * CQ pause + disable via ft8_is/set_cq_enabled — dialog must
+         * not disable CQ before this call, or s_cq_paused_for_qso
+         * will never be set and resume_cq_if_qso_gone() won't fire. */
         autosel_on_tx_msg_updated(meta, s_info->odd);
     }
     free(old_msg);
@@ -1131,17 +1133,18 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
             if (tx_msg.repeats > 0) {
                 tx_msg.repeats--;
             }
+            /* [Module hook point] post-TX repeat/QSO exhaustion logic —
+             *   see FT8_HOOK_PLAN.md §3.5.3.
+             *   Must run AFTER repeats-- (so exhaustion detection works)
+             *   and BEFORE tx_msg.msg[0]='\0' (so sent_grid / blacklist
+             *   still see the message). */
+            autosel_post_tx();
             if (tx_msg.repeats == 0) {
                 if (strncmp(tx_msg.msg, "CQ", 2) == 0) {
                     subject_set_int(cq_enabled, false);
                 }
                 tx_msg.msg[0] = '\0';
             }
-
-            /* [Module hook point] post-TX repeat/QSO exhaustion logic —
-             *   see FT8_HOOK_PLAN.md §3.5.3.
-             *   Must run AFTER repeats-- so exhaustion detection works. */
-            autosel_post_tx();
             return;
         }
     }

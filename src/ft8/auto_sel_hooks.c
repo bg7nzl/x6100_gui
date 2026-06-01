@@ -181,7 +181,7 @@ static void autosel_rx_hook(const char *text, int snr,
                            (no_current || s_recover_mode);
         if (may_collect) {
             int dist = compute_dist(meta);
-            autosel_add_candidate(meta, dist, snr);
+            autosel_add_candidate(meta, dist, meta->local_snr);
         }
     }
 }
@@ -319,6 +319,20 @@ void autosel_post_tx(void) {
     }
 }
 
+/* --- on_qso_saved -------------------------------------------------------
+ * Called from dialog's save_qso callback. At save time the QSO processor
+ * still has a current candidate → slot_end's resume_cq_if_qso_gone() won't
+ * fire, so we resume CQ here immediately (parity with source branch). */
+
+void autosel_on_qso_saved(void)
+{
+    if (s_cq_paused_for_qso) {
+        ft8_set_cq_enabled(true);
+        s_cq_paused_for_qso = false;
+        ft8_schedule_cq_tx();
+    }
+}
+
 /* --- on_tx_msg_updated -------------------------------------------------
  * Called from add_rx_text when QSO processor produces a new TX message.
  * Mirrors source branch side-effects in the tx_msg-changed branch. */
@@ -344,6 +358,17 @@ void autosel_on_tx_msg_updated(const ftx_msg_meta_t *meta, bool odd_slot) {
     s_recover_mode          = false;
     s_grid_tx_count         = 0;
     s_pending_grid_valid    = false;
+}
+
+/* --- on_mode_switch -----------------------------------------------------
+ * Called from dialog's mode_ft4_ft8_cb. Resets autosel session state
+ * (parity with source branch: clear cq_paused, unseen, QSO state). */
+
+void autosel_on_mode_switch(void)
+{
+    s_cq_paused_for_qso = false;
+    autosel_clear_unseen();
+    reset_qso_state();
 }
 
 /* ===================================================================
