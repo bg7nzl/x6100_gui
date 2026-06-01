@@ -1180,6 +1180,10 @@ void ft8_get_qth(double *lat, double *lon) {
     if (lon) *lon = cur_lon;
 }
 
+void ft8_set_dial_freq(uint32_t freq) {
+    set_freq(freq);
+}
+
 void ft8_schedule_cq_tx(void) {
     if (strlen(params.callsign.x) == 0)
         return;
