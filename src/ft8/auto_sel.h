@@ -26,13 +26,9 @@
 
 #include "qso.h"   /* ftx_msg_meta_t */
 
-/* Forward-declare slot_info_t for grid_swap signature.
- * Defined in audio_worker.h (C99 float complex, unsafe for C++). */
-typedef struct {
-    bool   odd;
-    bool   answer_generated;
-    time_t slot_start;
-} slot_info_t;
+/* Opaque forward-declare slot_info_t (full definition in audio_worker.h).
+ * Using pointer avoids pulling in C99 float complex from audio_worker.h. */
+typedef struct slot_info_t slot_info_t;
 
 #ifdef __cplusplus
 extern "C" {
