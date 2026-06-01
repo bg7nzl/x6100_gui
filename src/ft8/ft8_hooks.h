@@ -123,6 +123,8 @@ bool            *ft8_get_tx_time_slot(void);
 lv_obj_t        *ft8_get_finder(void);
 lv_obj_t        *ft8_get_waterfall(void);
 bool             ft8_is_tx_enabled(void);
+bool             ft8_is_cq_enabled(void);
+void             ft8_set_cq_enabled(bool on);
 void             ft8_set_dial_freq(uint32_t freq);
 
 /** Schedule a CQ TX using the current callsign/grid/modifier.

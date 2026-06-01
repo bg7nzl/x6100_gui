@@ -1169,6 +1169,8 @@ bool            *ft8_get_tx_time_slot(void)   { return &tx_time_slot; }
 lv_obj_t        *ft8_get_finder(void)         { return finder; }
 lv_obj_t        *ft8_get_waterfall(void)      { return waterfall; }
 bool             ft8_is_tx_enabled(void)       { return subject_get_int(tx_enabled); }
+bool             ft8_is_cq_enabled(void)        { return subject_get_int(cq_enabled); }
+void             ft8_set_cq_enabled(bool on)     { subject_set_int(cq_enabled, on); }
 
 void ft8_get_filter_range(int *low_hz, int *high_hz) {
     if (low_hz)  *low_hz  = filter_low;

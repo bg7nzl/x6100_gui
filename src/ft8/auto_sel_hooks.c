@@ -100,9 +100,9 @@ static void start_qso_from_meta(const ftx_msg_meta_t *meta,
 
 /* Pause CQ for an active QSO. */
 static void pause_cq_for_qso(void) {
-    if (subject_get_int(cq_enabled)) {
+    if (ft8_is_cq_enabled()) {
         s_cq_paused_for_qso = true;
-        subject_set_int(cq_enabled, false);
+        ft8_set_cq_enabled(false);
     }
 }
 
@@ -113,7 +113,7 @@ static void resume_cq_if_qso_gone(void) {
     bool qso_gone = (!qso || !ftx_qso_processor_has_current(qso));
 
     if (s_cq_paused_for_qso && qso_gone && (!txm || txm->msg[0] == '\0')) {
-        subject_set_int(cq_enabled, true);
+        ft8_set_cq_enabled(true);
         s_cq_paused_for_qso = false;
         ft8_schedule_cq_tx();
     }
