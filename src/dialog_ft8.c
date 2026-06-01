@@ -67,6 +67,7 @@
 #define FT4_WIDTH_HZ    83
 
 #define MAX_TX_START_DELAY 1.5f
+#define MAX_TX_START_DELAY_FT4 1.5f
 
 #define FT8_FREETEXT_FILE        "/mnt/ft8_freetext.txt"
 #define FT8_FREETEXT_MAX_LEN     13
@@ -1306,7 +1307,9 @@ static bool free_msg_ok_cb(void) {
     clock_gettime(CLOCK_REALTIME, &now);
     float time_since_slot_start = 0.0f;
     tx_time_slot = !get_time_slot(now, &time_since_slot_start);
-    if (time_since_slot_start < MAX_TX_START_DELAY) {
+    float max_delay = (subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8)
+                      ? MAX_TX_START_DELAY : MAX_TX_START_DELAY_FT4;
+    if (time_since_slot_start < max_delay) {
         tx_time_slot = !tx_time_slot;
     }
 
