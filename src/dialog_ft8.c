@@ -1004,6 +1004,10 @@ static void add_rx_text(int16_t snr, const char * text, slot_info_t *s_info, flo
         if (subject_get_int(cq_enabled)) {
             subject_set_int(cq_enabled, false);
         }
+
+        /* Notify AutoSel of TX message change (QSO partner tracking,
+         * CQ pause flag, exhaustion reset). */
+        autosel_on_tx_msg_updated(meta, s_info->odd);
     }
     free(old_msg);
 
@@ -1101,7 +1105,11 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
              * [Module hook point] grid-swap / pre-TX logic that needs
              *   to modify tx_msg or defer this tick —
              *   see FT8_HOOK_PLAN.md §3.5.2 */
-            autosel_grid_swap_on_tick();
+            /* Grid swap may re-target the opposite slot; defer this tick
+             * if so (the next tick will fire the actual TX). */
+            if (autosel_grid_swap_on_tick(info)) {
+                return;
+            }
             for (uint8_t i = 0; i < pre_tx_hook_cnt; i++)
                 pre_tx_hooks[i](info);
 
@@ -1120,10 +1128,6 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
             tx_worker_run_with_config(&tx_cfg);
             state = RX_PROCESS;
 
-            /* [Module hook point] post-TX repeat/QSO exhaustion logic —
-             *   see FT8_HOOK_PLAN.md §3.5.3 */
-            autosel_post_tx();
-
             if (tx_msg.repeats > 0) {
                 tx_msg.repeats--;
             }
@@ -1133,6 +1137,11 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
                 }
                 tx_msg.msg[0] = '\0';
             }
+
+            /* [Module hook point] post-TX repeat/QSO exhaustion logic —
+             *   see FT8_HOOK_PLAN.md §3.5.3.
+             *   Must run AFTER repeats-- so exhaustion detection works. */
+            autosel_post_tx();
             return;
         }
     }

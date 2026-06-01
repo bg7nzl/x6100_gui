@@ -197,9 +197,6 @@ static void autosel_slot_end_hook(const slot_info_t *info) {
     /* Cycle blacklist must advance BEFORE start_new_slot. */
     autosel_blacklist_advance_cycle();
 
-    if (qso) {
-        ftx_qso_processor_start_new_slot(qso);
-    }
 
     /* No active QSO: drop all per-QSO bookkeeping. */
     if (!qso || !ftx_qso_processor_has_current(qso)) {
@@ -254,10 +251,10 @@ static void autosel_slot_end_hook(const slot_info_t *info) {
 
 /* --- grid_swap_on_tick ------------------------------------------------ */
 
-bool autosel_grid_swap_on_tick(void) {
+bool autosel_grid_swap_on_tick(const slot_info_t *info) {
     FTxQsoProcessor *qso = ft8_get_qso_processor();
     ftx_tx_msg_t    *txm = ft8_get_tx_msg();
-    if (!qso || !txm) return false;
+    if (!qso || !txm || !info) return false;
     if (!is_grid_exchange_msg(txm->msg)) return false;
     if (!s_qso_active) return false;
     if (s_grid_tx_count < 2) return false;
@@ -275,9 +272,7 @@ bool autosel_grid_swap_on_tick(void) {
 
     /* If the swap re-targeted the opposite slot, signal dialog to defer. */
     bool *tx_slot = ft8_get_tx_time_slot();
-    const slot_info_t *info = NULL; /* not available here; dialog checks */
-    (void)info;
-    return (*tx_slot);
+    return (*tx_slot != info->odd);
 }
 
 /* --- post_tx ----------------------------------------------------------
@@ -322,6 +317,33 @@ void autosel_post_tx(void) {
     if (!ftx_qso_processor_has_current(qso) && txm->msg[0] == '\0') {
         resume_cq_if_qso_gone();
     }
+}
+
+/* --- on_tx_msg_updated -------------------------------------------------
+ * Called from add_rx_text when QSO processor produces a new TX message.
+ * Mirrors source branch side-effects in the tx_msg-changed branch. */
+
+void autosel_on_tx_msg_updated(const ftx_msg_meta_t *meta, bool odd_slot) {
+    (void)odd_slot;
+    if (!meta) return;
+
+    /* Remember which station we're now working. */
+    if (meta->to_me && (meta->call_de[0] != '\0')) {
+        strncpy(s_qso_active_call, meta->call_de, sizeof(s_qso_active_call) - 1);
+        s_qso_active_call[sizeof(s_qso_active_call) - 1] = '\0';
+    }
+
+    /* Pause CQ during this QSO; restore on QSO end. */
+    if (ft8_is_cq_enabled()) {
+        s_cq_paused_for_qso = true;
+        ft8_set_cq_enabled(false);
+    }
+
+    /* Any TX progress invalidates exhausted/recover state. */
+    s_qso_tx_exhausted      = false;
+    s_recover_mode          = false;
+    s_grid_tx_count         = 0;
+    s_pending_grid_valid    = false;
 }
 
 /* ===================================================================

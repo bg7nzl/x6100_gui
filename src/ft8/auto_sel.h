@@ -88,12 +88,17 @@ const char *autosel_get_mode_text(void);
 
 /** Pre-TX grid swap: if a pending grid caller is stashed and we are
  *  mid-QSO, swap tx_msg to work the grid caller. Returns true if
- *  a swap was performed. Call from on_tick_cb before TX. */
-bool autosel_grid_swap_on_tick(void);
+ *  the tick should be deferred (slot mismatch after swap).
+ *  info is the current slot_info from on_tick_cb. */
+bool autosel_grid_swap_on_tick(const slot_info_t *info);
 
 /** Post-TX housekeeping: track grid TX count, detect QSO exhaustion.
  *  Call from on_tick_cb after TX completes. */
 void autosel_post_tx(void);
+
+/** Called from add_rx_text when the QSO processor updates tx_msg.
+ *  Tracks qso_active_call, cq_paused flag, clears exhaustion state. */
+void autosel_on_tx_msg_updated(const ftx_msg_meta_t *meta, bool odd_slot);
 
 #ifdef __cplusplus
 }
