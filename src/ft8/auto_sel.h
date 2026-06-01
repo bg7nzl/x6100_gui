@@ -26,9 +26,12 @@
 
 #include "qso.h"   /* ftx_msg_meta_t */
 
-/* Opaque forward-declare slot_info_t (full definition in audio_worker.h).
- * Using pointer avoids pulling in C99 float complex from audio_worker.h. */
-typedef struct slot_info_t slot_info_t;
+/* slot_info_t is needed by autosel_grid_swap_on_tick signature.
+ * Include audio_worker.h only for C (C99 float complex breaks C++).
+ * In C++ only the opaque picker API is used; slot_info_t not needed. */
+#ifndef __cplusplus
+#include "audio_worker.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
