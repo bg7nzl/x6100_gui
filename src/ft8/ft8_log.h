@@ -46,6 +46,7 @@ void ft8_log_rx_flush_slot(const slot_info_t *info);
 void ft8_log_tx(time_t slot_start, uint64_t base_freq_hz,
                 uint32_t hz_offset, const char *text);
 void ft8_log_qso(time_t slot_start, const char *remote_call);
+void ft8_log_dnf(time_t slot_start, uint16_t center_hz, float delta_db);
 
 /** Register all ft8_log hook adapters with the dialog's hook chain.
  *  Idempotent — safe to call multiple times (static bool guard).

@@ -202,6 +202,16 @@ void ft8_log_qso(time_t slot_start, const char *remote_call) {
     fflush(s_fp);
 }
 
+void ft8_log_dnf(time_t slot_start, uint16_t center_hz, float delta_db) {
+    ensure_open();
+    if (!s_fp) return;
+
+    char slot_ts[32];
+    format_slot_ts(slot_start, slot_ts, sizeof(slot_ts));
+    fprintf(s_fp, "DNF,%s,%u,%.1f\n", slot_ts, (unsigned)center_hz, (double)delta_db);
+    fflush(s_fp);
+}
+
 /* ---- Hook adapters and registration ---------------------------------- */
 
 #include "ft8_hooks.h"
