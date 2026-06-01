@@ -381,14 +381,46 @@ extern "C" bool autosel_is_blacklisted(const char *call) {
 }
 /* ---- Hook adapters and registration (PR-AUTOSEL) --------------------- */
 
+/* audio_worker.h uses C99 float complex which is invalid C++.
+ * Avoid including it: forward-declare slot_info_t instead. */
+struct slot_info_t;
+
 extern "C" {
-#include <complex.h>   /* for float complex used by audio_worker.h */
-#include "ft8_hooks.h"
 #include "../qth/qth.h"
 #include "../cfg/subjects.h"
 #include "../cfg/cfg.h"
 #include "../params/params.h"
 #include "../msg.h"
+
+/* Hook registration API (ft8_hooks.h subset, without audio_worker.h) */
+typedef void (*ft8_lifecycle_fn_t)(void);
+typedef void (*ft8_rx_msg_fn_t)(const char *text, int snr,
+                                float freq_hz, float time_sec,
+                                struct ftx_msg_meta_t *meta,
+                                const struct slot_info_t *info);
+typedef void (*ft8_psd_fn_t)(const float *psd, uint16_t nfft,
+                             float sec_since_slot_start,
+                             const struct slot_info_t *info);
+typedef void (*ft8_slot_end_fn_t)(const struct slot_info_t *info);
+typedef void (*ft8_pre_tx_fn_t)(const struct slot_info_t *info);
+
+void ft8_register_init_hook(ft8_lifecycle_fn_t fn);
+void ft8_register_cleanup_hook(ft8_lifecycle_fn_t fn);
+void ft8_register_rx_msg_hook(ft8_rx_msg_fn_t fn);
+void ft8_register_slot_end_hook(ft8_slot_end_fn_t fn);
+void ft8_register_psd_hook(ft8_psd_fn_t fn);
+void ft8_register_pre_tx_hook(ft8_pre_tx_fn_t fn);
+
+/* Dialog getters used by the state machine */
+struct FTxQsoProcessor;
+bool ftx_qso_processor_has_current(struct FTxQsoProcessor*);
+struct ftx_tx_msg_t;
+struct ftx_tx_msg_t *ft8_get_tx_msg(void);
+bool *ft8_get_tx_time_slot(void);
+struct FTxQsoProcessor *ft8_get_qso_processor(void);
+bool ft8_is_tx_enabled(void);
+void ft8_schedule_cq_tx(void);
+void ft8_get_qth(double *lat, double *lon);
 }
 
 #include <cstdio>
