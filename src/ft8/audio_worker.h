@@ -45,11 +45,14 @@ extern "C" {
  * header timestamps, ft8_log) should prefer this over time(NULL) so
  * messages from the same slot always render with the same timestamp.
  */
+#ifndef slot_info_t_DEFINED
+#define slot_info_t_DEFINED
 typedef struct {
     bool   odd;
     bool   answer_generated;
     time_t slot_start;
 } slot_info_t;
+#endif
 
 typedef struct audio_worker_s audio_worker_t;
 

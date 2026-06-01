@@ -26,11 +26,16 @@
 
 #include "qso.h"   /* ftx_msg_meta_t */
 
-/* slot_info_t is needed by autosel_grid_swap_on_tick signature.
- * Include audio_worker.h only for C (C99 float complex breaks C++).
- * In C++ only the opaque picker API is used; slot_info_t not needed. */
-#ifndef __cplusplus
-#include "audio_worker.h"
+/* Provide slot_info_t for C++ callers without pulling audio_worker.h
+ * (C99 float complex). In C, audio_worker.h defines it; we guard so
+ * the two definitions don't conflict. */
+#ifndef slot_info_t_DEFINED
+#define slot_info_t_DEFINED
+typedef struct {
+    bool   odd;
+    bool   answer_generated;
+    time_t slot_start;
+} slot_info_t;
 #endif
 
 #ifdef __cplusplus
