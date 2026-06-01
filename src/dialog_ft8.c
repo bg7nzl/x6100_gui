@@ -32,6 +32,7 @@
 #include "textarea_window.h"
 
 #include "ft8/audio_worker.h"
+#include "ft8/auto_dnf.h"
 #include "ft8/cq_scheduler.h"
 #include "ft8/table_view.h"
 #include "ft8/tx_worker.h"
@@ -186,6 +187,9 @@ static void add_info(const char * fmt, ...);
 static void add_tx_text(const char * text);
 static bool get_time_slot(struct timespec now, float *time_since_start);
 
+static const char * auto_dnf_label_getter(void);
+static void auto_dnf_cb(struct button_item_t *btn);
+
 
 // button label is current state, press action and name - next state
 
@@ -208,6 +212,7 @@ static button_item_t button_force_save = { .type=BTN_TEXT, .label = "Force QSO\n
 static button_item_t button_page_3 = { .type=BTN_TEXT, .label = "(Page: 3:4)", .press = button_next_page_cb, .next=&btn_page_4};
 static button_item_t button_cq_mod = { .type=BTN_TEXT, .label = "CQ\nModifier", .press = cq_modifier_cb };
 static button_item_t button_time_sync = { .type=BTN_TEXT, .label = "Time\nSync", .press = time_sync };
+static button_item_t button_auto_dnf = { .type=BTN_TEXT_FN, .label_fn = auto_dnf_label_getter, .press = auto_dnf_cb, .subj=&cfg.ft8_auto_dnf.val };
 
 static button_item_t button_page_4 = { .type=BTN_TEXT, .label = "(Page: 4:4)", .press = button_next_page_cb, .next=&btn_page_1};
 
@@ -220,7 +225,7 @@ static buttons_page_t btn_page_2 = {
 };
 
 static buttons_page_t btn_page_3 = {
-    {&button_page_3, &button_cq_mod, &button_time_sync}
+    {&button_page_3, &button_cq_mod, &button_time_sync, &button_auto_dnf}
 };
 
 static buttons_page_t btn_page_4 = {
@@ -637,10 +642,21 @@ static void construct_cb(lv_obj_t *parent) {
     /* Register feature-module hooks before firing init hooks.
      * Each call is idempotent (static bool guard). */
     ft8_log_register_hooks();
+    auto_dnf_register_hooks();
 
     /* Run all registered init hooks after base setup is complete. */
     for (uint8_t i = 0; i < init_hook_cnt; i++)
         init_hooks[i]();
+
+    /* Auto DNF overlay: build after init hook creates the context. */
+    {
+        auto_dnf_ctx_t *dnf = auto_dnf_get_ctx();
+        if (dnf) {
+            auto_dnf_build_overlay(dnf, dialog.obj,
+                                   13, 13, 325, WIDTH,
+                                   filter_low, filter_high);
+        }
+    }
 }
 
 /* Buttons */
@@ -679,6 +695,24 @@ const char *auto_label_getter() {
     static char buf[32];
     sprintf(buf, "Auto:\n%s", subject_get_int(cfg.ft8_auto.val) ? "Enabled": "Disabled");
     return buf;
+}
+
+const char *auto_dnf_label_getter(void) {
+    static char buf[32];
+    sprintf(buf, "Auto DNF:\n%s", subject_get_int(cfg.ft8_auto_dnf.val) ? "On" : "Off");
+    return buf;
+}
+
+static void auto_dnf_cb(struct button_item_t *btn) {
+    (void)btn;
+    if (disable_buttons) return;
+    bool new_val = !subject_get_int(cfg.ft8_auto_dnf.val);
+    subject_set_int(cfg.ft8_auto_dnf.val, new_val);
+    /* Toggling off mid-slot: restore manual DNF state immediately. */
+    if (!new_val) {
+        auto_dnf_ctx_t *dnf = auto_dnf_get_ctx();
+        if (dnf) auto_dnf_restore_entry(dnf);
+    }
 }
 
 static void show_cq_all_cb(struct button_item_t *btn) {
@@ -1055,6 +1089,9 @@ static void on_psd_cb(const float *psd, uint16_t nfft, float sec_since_slot_star
     uint32_t high_bin = (uint32_t)nfft / 2u + (uint32_t)nfft * (uint32_t)filter_high / (uint32_t)SAMPLE_RATE;
     if (high_bin > nfft) high_bin = nfft;
     if (low_bin >= high_bin) return;
+
+    /* Slot-boundary marker (before PSD data so it sits above the row). */
+    auto_dnf_draw_slot_marker(info, waterfall);
 
     lv_waterfall_add_data(waterfall, (float *)&psd[low_bin], (int32_t)(high_bin - low_bin));
 

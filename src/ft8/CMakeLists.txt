@@ -5,6 +5,8 @@ add_library(FT8 STATIC
     tx_worker.c
     audio_worker.c
     ft8_log.c
+    params.c
+    auto_dnf.c
 )
 
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/..")
