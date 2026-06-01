@@ -382,8 +382,8 @@ extern "C" bool autosel_is_blacklisted(const char *call) {
 /* ---- Hook adapters and registration (PR-AUTOSEL) --------------------- */
 
 /* audio_worker.h uses C99 float complex which is invalid C++.
- * Avoid including it: forward-declare slot_info_t instead. */
-struct slot_info_t;
+ * Avoid including it: define slot_info_t locally, pull qso.h for
+ * ftx_tx_msg_t / ftx_msg_meta_t / FTxQsoProcessor (safe, no C99). */
 
 extern "C" {
 #include "../qth/qth.h"
@@ -391,18 +391,26 @@ extern "C" {
 #include "../cfg/cfg.h"
 #include "../params/params.h"
 #include "../msg.h"
+#include "qso.h"        /* ftx_tx_msg_t, ftx_msg_meta_t, FTxQsoProcessor */
 
-/* Hook registration API (ft8_hooks.h subset, without audio_worker.h) */
+/* Replicate slot_info_t from audio_worker.h (avoids C99 float complex). */
+typedef struct {
+    bool   odd;
+    bool   answer_generated;
+    time_t slot_start;
+} slot_info_t;
+
+/* Hook typedefs (mirror ft8_hooks.h, but use our slot_info_t). */
 typedef void (*ft8_lifecycle_fn_t)(void);
 typedef void (*ft8_rx_msg_fn_t)(const char *text, int snr,
                                 float freq_hz, float time_sec,
-                                struct ftx_msg_meta_t *meta,
-                                const struct slot_info_t *info);
+                                ftx_msg_meta_t *meta,
+                                const slot_info_t *info);
 typedef void (*ft8_psd_fn_t)(const float *psd, uint16_t nfft,
                              float sec_since_slot_start,
-                             const struct slot_info_t *info);
-typedef void (*ft8_slot_end_fn_t)(const struct slot_info_t *info);
-typedef void (*ft8_pre_tx_fn_t)(const struct slot_info_t *info);
+                             const slot_info_t *info);
+typedef void (*ft8_slot_end_fn_t)(const slot_info_t *info);
+typedef void (*ft8_pre_tx_fn_t)(const slot_info_t *info);
 
 void ft8_register_init_hook(ft8_lifecycle_fn_t fn);
 void ft8_register_cleanup_hook(ft8_lifecycle_fn_t fn);
@@ -412,15 +420,13 @@ void ft8_register_psd_hook(ft8_psd_fn_t fn);
 void ft8_register_pre_tx_hook(ft8_pre_tx_fn_t fn);
 
 /* Dialog getters used by the state machine */
-struct FTxQsoProcessor;
-bool ftx_qso_processor_has_current(struct FTxQsoProcessor*);
-struct ftx_tx_msg_t;
-struct ftx_tx_msg_t *ft8_get_tx_msg(void);
-bool *ft8_get_tx_time_slot(void);
-struct FTxQsoProcessor *ft8_get_qso_processor(void);
-bool ft8_is_tx_enabled(void);
-void ft8_schedule_cq_tx(void);
-void ft8_get_qth(double *lat, double *lon);
+#include "qso.h"
+ftx_tx_msg_t     *ft8_get_tx_msg(void);
+bool             *ft8_get_tx_time_slot(void);
+FTxQsoProcessor  *ft8_get_qso_processor(void);
+bool              ft8_is_tx_enabled(void);
+void              ft8_schedule_cq_tx(void);
+void              ft8_get_qth(double *lat, double *lon);
 }
 
 #include <cstdio>
