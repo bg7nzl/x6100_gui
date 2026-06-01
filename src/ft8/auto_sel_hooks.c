@@ -14,7 +14,7 @@
 #include "../params/params.h"
 #include "../qth/qth.h"
 #include "../msg.h"
-#include "../lv_finder.h"
+#include "../widge../widgets/lv_finder.h"
 
 #include <stdbool.h>
 #include <stdint.h>
