@@ -121,6 +121,7 @@ static void resume_cq_if_qso_gone(void) {
 
 static int compute_dist(const ftx_msg_meta_t *meta) {
     if (!meta || meta->grid[0] == '\0' || !s_local_qth_valid) return 0;
+    if (!qth_grid_check(meta->grid)) return 0;
     double qth_lat = 0.0, qth_lon = 0.0;
     ft8_get_qth(&qth_lat, &qth_lon);
     double grid_lat = 0.0, grid_lon = 0.0;
