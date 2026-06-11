@@ -34,6 +34,7 @@
 #include "ft8/cq_scheduler.h"
 #include "ft8/table_view.h"
 #include "ft8/tx_worker.h"
+#include "ft8/ft8_log.h"
 #include "widgets/lv_waterfall.h"
 #include "widgets/lv_finder.h"
 
@@ -400,6 +401,7 @@ static void destruct_cb() {
      *   autosel_cleanup_state(); */
 
     worker_done();
+    ft8_log_on_cleanup();
     table_view_destroy();
 
     /* The LVGL objects themselves are deleted by dialog_destruct() via
@@ -653,6 +655,7 @@ static void construct_cb(lv_obj_t *parent) {
      * Timing: after worker_init() and base gain setup — audio worker and
      * qso_processor are ready; module init may register buttons or load files.
      * Example: ft8_log_on_init(); ft8_autodnf_on_init(); */
+    ft8_log_on_init();
 }
 
 /* Buttons */
@@ -1082,6 +1085,7 @@ static void on_message_cb(const char *text, int snr, float freq_hz, float time_s
      * valid; tx_msg may have been updated by qso_processor inside add_rx_text.
      * Constraint: no direct lv_* calls; use scheduler_put / *_async helpers.
      * Example: ft8_log_on_rx_msg(text, snr, freq_hz, time_sec, &last_rx_meta, info); */
+    ft8_log_on_rx_msg(text, snr, freq_hz, time_sec, &last_rx_meta, info);
 }
 
 /*
@@ -1166,6 +1170,7 @@ static void on_slot_end_cb(const slot_info_t *info, void *ctx) {
      * and final decode flush — info describes the slot that just ended.
      * Constraint: no direct lv_* calls; use scheduler_put / *_async helpers.
      * Example: ft8_log_on_slot_end(info); ft8_autosel_on_slot_end(info); */
+    ft8_log_on_slot_end(info);
 }
 
 static void on_tick_cb(const slot_info_t *info, bool new_slot,
@@ -1184,7 +1189,8 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
          * before state = TX_PROCESS and tx_worker_run_with_config().
          * Use for: TX file log open, DNF marker clear, grid-swap on tx_msg.
          * Cannot defer TX from here without modifying core flow below.
-         * Example: ft8_log_on_pre_tx(info); */
+         * Example: ft8_log_on_pre_tx(info, tx_msg.msg); */
+        ft8_log_on_pre_tx(info, tx_msg.msg);
         state = TX_PROCESS;
 
         ft8_tx_config_t tx_cfg = {
