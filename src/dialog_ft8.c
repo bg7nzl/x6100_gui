@@ -63,7 +63,8 @@
 #define FT8_WIDTH_HZ    50
 #define FT4_WIDTH_HZ    83
 
-#define MAX_TX_START_DELAY 1.5f
+#define MAX_TX_START_DELAY     5.0f
+#define MAX_TX_START_DELAY_FT4 1.5f
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(arr[0]))
 
@@ -1466,10 +1467,12 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
     bool tx_enabled_now = subject_get_int(tx_enabled);
     bool tx_slot_pending = have_tx_msg && tx_enabled_now && (tx_time_slot == info->odd);
 
-    if ((sec_since_slot_start < MAX_TX_START_DELAY) && tx_slot_pending) {
+    float tx_max_delay = (subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8)
+                         ? MAX_TX_START_DELAY : MAX_TX_START_DELAY_FT4;
+    if ((sec_since_slot_start < tx_max_delay) && tx_slot_pending) {
         /* Module extension point: pre_tx
          * Thread: audio worker (on_tick_cb).
-         * Timing: sec_since_slot_start < MAX_TX_START_DELAY, tx_time_slot
+         * Timing: sec_since_slot_start < max delay, tx_time_slot
          * matches info->odd, TX enabled, and tx_msg non-empty — immediately
          * before state = TX_PROCESS and tx_worker_run_with_config().
          * Use for: TX file log open, DNF marker clear, grid-swap on tx_msg.
@@ -1484,10 +1487,11 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
         tx_text[sizeof(tx_text) - 1] = '\0';
 
         ft8_tx_config_t tx_cfg = {
-            .tx_text          = tx_text,
-            .base_gain_offset = base_gain_offset,
-            .abort_check      = tx_should_abort_cb,
-            .abort_check_ctx  = NULL,
+            .tx_text              = tx_text,
+            .base_gain_offset     = base_gain_offset,
+            .sec_since_slot_start = sec_since_slot_start,
+            .abort_check          = tx_should_abort_cb,
+            .abort_check_ctx      = NULL,
         };
         add_slot_info(CELL_TX_INFO, "TX");
         add_tx_text(tx_text);
@@ -1523,7 +1527,7 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
      * slot has passed, drop the message instead of deferring it. The engine
      * re-decides at the next slot end (sticky retry regenerates it). */
     if (tx_msg_oneshot && have_tx_msg && (tx_time_slot == info->odd) &&
-        (sec_since_slot_start >= MAX_TX_START_DELAY)) {
+        (sec_since_slot_start >= tx_max_delay)) {
         tx_msg.msg[0] = '\0';
         tx_msg_oneshot = false;
     }
