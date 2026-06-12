@@ -1227,6 +1227,7 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
                 subject_set_int(cq_enabled, false);
             }
             tx_msg.msg[0] = '\0';
+            tx_msg.force_free_text = false;
         }
         return;
     }
