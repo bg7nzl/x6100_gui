@@ -5,6 +5,7 @@ add_library(FT8 STATIC
     tx_worker.c
     audio_worker.c
     auto_dnf.c
+    auto_sel.cpp
     params.c
 )
 
