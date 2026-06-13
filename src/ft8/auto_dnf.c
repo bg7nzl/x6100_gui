@@ -8,9 +8,6 @@
 
 #include "auto_dnf.h"
 #include "ft8_log.h"
-/* #include "ft8_log.h" -- disabled: DNF is independent of LOG (§7.6).
- * ft8_log_dnf() call is commented out below; uncomment when both
- * PR-LOG and PR-DNF are merged into bg7nzl. */
 
 #include <math.h>
 #include <pthread.h>
