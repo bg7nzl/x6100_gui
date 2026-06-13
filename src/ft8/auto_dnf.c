@@ -7,6 +7,7 @@
  */
 
 #include "auto_dnf.h"
+#include "ft8_log.h"
 /* #include "ft8_log.h" -- disabled: DNF is independent of LOG (§7.6).
  * ft8_log_dnf() call is commented out below; uncomment when both
  * PR-LOG and PR-DNF are merged into bg7nzl. */
@@ -188,9 +189,13 @@ static void apply_cb(void *arg) {
     subject_set_int(cfg.dnf_center.val, m->center_hz);
     subject_set_int(cfg.dnf_width.val,  m->half_width_hz);
 
-    /* Log only actual applies. */
-    /* (void)slot_start_wall; */
-    /* ft8_log_dnf(slot_start_wall, m->center_hz, m->delta_db); -- disabled §7.6 */
+    /* Log DNF event to file log (capstone §C.2 / §C.5). */
+    {
+        double slot_dur_sec = (proto == FTX_PROTOCOL_FT4) ? 7.5 : 15.0;
+        double now_sec = (double)ts_now.tv_sec + (double)ts_now.tv_nsec / 1.0e9;
+        time_t slot_start_wall = (time_t)(now_sec - fmod(now_sec, slot_dur_sec));
+        ft8_log_dnf(slot_start_wall, m->center_hz, m->delta_db);
+    }
 
     overlay_show(ctx, m->center_hz, m->half_width_hz, m->delta_db, true);
 }
