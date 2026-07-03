@@ -37,6 +37,7 @@
 #include "ft8/cq_scheduler.h"
 #include "ft8/table_view.h"
 #include "ft8/tx_worker.h"
+#include "ft8/ft8_log.h"
 #include "widgets/lv_waterfall.h"
 #include "widgets/lv_finder.h"
 
@@ -415,6 +416,7 @@ static void destruct_cb() {
     subject_set_int(cq_enabled, CQ_OFF);
 
     worker_done();
+    ft8_log_on_cleanup();
     ft8_autodnf_on_cleanup();
     table_view_destroy();
 
@@ -676,6 +678,7 @@ static void construct_cb(lv_obj_t *parent) {
      * Timing: after worker_init() and base gain setup — audio worker and
      * worker/table state is ready; modules may register buttons or load files.
      * Example: ft8_log_on_init(); ft8_autodnf_on_init(); */
+    ft8_log_on_init();
     ft8_autodnf_on_init(dialog.obj);
     /* Overlay is a waterfall child; keep the decode table on top. */
     lv_obj_move_foreground(table);
@@ -1317,6 +1320,7 @@ static void on_message_cb(const char *text, int snr, float freq_hz, float time_s
      * valid; decoded_slot_msgs has the raw message for slot-end processing.
      * Constraint: no direct lv_* calls; use scheduler_put / *_async helpers.
      * Example: ft8_log_on_rx_msg(text, snr, freq_hz, time_sec, &last_rx_meta, info); */
+    ft8_log_on_rx_msg(text, snr, freq_hz, time_sec, &last_rx_meta, info);
 }
 
 /*
@@ -1434,6 +1438,7 @@ static void on_slot_end_cb(const slot_info_t *info, void *ctx) {
      * describes the slot that just ended.
      * Constraint: no direct lv_* calls; use scheduler_put / *_async helpers.
      * Example: ft8_log_on_slot_end(info); ft8_autosel_on_slot_end(info); */
+    ft8_log_on_slot_end(info);
 }
 
 static void on_tick_cb(const slot_info_t *info, bool new_slot,
@@ -1454,15 +1459,18 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
          * before state = TX_PROCESS and tx_worker_run_with_config().
          * Use for: TX file log open, DNF marker clear, grid-swap on tx_msg.
          * Cannot defer TX from here without modifying core flow below.
-         * Example: ft8_log_on_pre_tx(info); */
-        ft8_autodnf_on_pre_tx(info);
-        state = TX_PROCESS;
+         * Example: ft8_log_on_pre_tx(info, tx_text); */
 
         /* Snapshot the message: the UI thread (on_table_press) may overwrite
-         * tx_msg while the blocking TX below is in flight. */
+         * tx_msg while the blocking TX below is in flight. The log hook gets
+         * the snapshot too, so it records the text actually transmitted. */
         char tx_text[sizeof(tx_msg.msg)];
         strncpy(tx_text, tx_msg.msg, sizeof(tx_text) - 1);
         tx_text[sizeof(tx_text) - 1] = '\0';
+
+        ft8_autodnf_on_pre_tx(info);
+        ft8_log_on_pre_tx(info, tx_text);
+        state = TX_PROCESS;
 
         ft8_tx_config_t tx_cfg = {
             .tx_text              = tx_text,
