@@ -1413,11 +1413,17 @@ static void on_slot_end_cb(const slot_info_t *info, void *ctx) {
         if (response.save) {
             save_qso_record(&response.qso);
         }
+        /* A pending Free MSG wins its slot: the engine still ran above
+         * (peers, blacklist and save are all updated), only its TX output is
+         * dropped. The engine re-decides at the next slot end, so nothing is
+         * lost. The CQ re-arm below yields for the same reason. */
+        bool free_msg_pending = tx_msg.force_free_text && (tx_msg.msg[0] != '\0');
         /* Respect the TX Call switch: the user can pause engine-driven
          * transmissions without leaving the mode. */
-        if ((response.action == FTX_QSO_ACTION_TX) && subject_get_int(tx_enabled)) {
+        if ((response.action == FTX_QSO_ACTION_TX) && !free_msg_pending &&
+            subject_get_int(tx_enabled)) {
             apply_qso_response(&response, true);
-        } else if ((subject_get_int(cq_enabled) != CQ_OFF) &&
+        } else if ((subject_get_int(cq_enabled) != CQ_OFF) && !free_msg_pending &&
                    (strncmp(tx_msg.msg, "CQ", 2) != 0)) {
             /* The TX slot is free again: the engine has nothing to send and
              * the reply that displaced the CQ was consumed (or its one-shot
