@@ -62,7 +62,7 @@
 
 #define UNKNOWN_SNR     99
 
-#define MAX_PWR         5.0f
+#define MAX_PWR         10.0f
 
 #define FT8_WIDTH_HZ    50
 #define FT4_WIDTH_HZ    83
