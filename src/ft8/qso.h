@@ -35,6 +35,7 @@ typedef struct {
 typedef struct {
     char msg[35];
     int  repeats;
+    bool force_free_text;  ///< when true, encode as FT8 free text only (e.g. Free MSG)
 } ftx_tx_msg_t;
 
 /* Engine behaviour level (the "Auto" button): how far the engine may go
