@@ -40,6 +40,7 @@
 #include "usb_devices.h"
 #include "remote_control.h"
 #include "remote_screen.h"
+#include "tx_log.h"
 
 #define DISP_BUF_SIZE (800 * 480 * 4)
 
@@ -98,6 +99,7 @@ int main(void) {
     vol->state = VOL_STATE_EDIT;
 
     params_init();
+    tx_log_init();
     audio_set_play_vol(params.play_gain_db_f.x);
     audio_set_rec_vol(params.rec_gain_db_f.x);
     mfk_init();

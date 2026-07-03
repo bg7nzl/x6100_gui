@@ -17,6 +17,7 @@ target_sources(${PROJECT_NAME} PUBLIC
     dialog_wifi.c wifi.cpp controls.cpp usb_devices.cpp
     knobs.cpp
     remote_control.c remote_screen.c
+    tx_log.c
 )
 
 add_subdirectory(fonts)
