@@ -410,8 +410,7 @@ static void destruct_cb() {
      * Example:
      *   worker_done();
      *   ft8_log_on_cleanup();
-     *   ft8_autodnf_on_cleanup();
-     *   autosel_cleanup_state(); */
+     *   ft8_autodnf_on_cleanup(); */
 
     subject_set_int(cq_enabled, CQ_OFF);
 
@@ -1437,7 +1436,7 @@ static void on_slot_end_cb(const slot_info_t *info, void *ctx) {
      * Timing: at FT8/FT4 slot boundary, after final decode flush — info
      * describes the slot that just ended.
      * Constraint: no direct lv_* calls; use scheduler_put / *_async helpers.
-     * Example: ft8_log_on_slot_end(info); ft8_autosel_on_slot_end(info); */
+     * Example: ft8_log_on_slot_end(info); */
     ft8_log_on_slot_end(info);
 }
 
@@ -1489,7 +1488,7 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
          * Thread: audio worker (on_tick_cb).
          * Timing: immediately after tx_worker_run_with_config() returns —
          * TX slot finished; CQ repeats have not yet been decremented.
-         * Example: ft8_autosel_on_post_tx(info); */
+         * Example: module post-TX bookkeeping. */
 
         /* Skip repeats bookkeeping if the user queued a different message
          * during the TX above; it has its own fresh counter. */
