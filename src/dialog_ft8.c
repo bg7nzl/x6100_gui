@@ -1388,6 +1388,17 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
                        float sec_since_slot_start, void *ctx) {
     (void)ctx;
 
+    if (new_slot) {
+        /* Workaround: BASE can key RF TX without any GUI TX_ATTEMPT (phantom
+         * carrier). radio_thread only calls x6100_control_idle() while
+         * state==RADIO_RX; stuck flow.flag.tx keeps RADIO_TX and disables that
+         * 3s idle for hours. Re-push the full register shadow at each slot
+         * boundary from here — still runs in RADIO_TX. Harmless on normal RX
+         * (redundant with the periodic idle) and on TX slots (tx_worker keys
+         * modem on immediately below if this slot transmits). */
+        radio_idle();
+    }
+
     bool have_tx_msg = tx_msg.msg[0] != '\0';
     bool tx_enabled_now = subject_get_int(tx_enabled);
     bool tx_slot_pending = have_tx_msg && tx_enabled_now && (tx_time_slot == info->odd);

@@ -408,6 +408,10 @@ void radio_set_modem(bool tx) {
     WITH_RADIO_LOCK(x6100_control_modem_set(tx));
 }
 
+void radio_idle(void) {
+    WITH_RADIO_LOCK(x6100_control_idle());
+}
+
 void radio_set_line_in(uint8_t d) {
     CHANGE_PARAM(d, params.line_in, params.dirty.line_in, x6100_control_linein_set);
 }

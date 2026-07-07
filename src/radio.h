@@ -68,6 +68,7 @@ void radio_stop_swrscan();
 void radio_poweroff();
 void radio_set_ptt(bool tx);
 void radio_set_modem(bool tx);
+void radio_idle(void);
 
 void radio_set_line_in(uint8_t d);
 void radio_set_line_out(uint8_t d);
