@@ -261,7 +261,7 @@ TEST_CASE("Auto mode SNR", "[ft8_qso]") {
         REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
     }
 
-    SECTION("Same TX text stops after three sends") {
+    SECTION("CQ reply stops after three sends") {
         for (int i = 0; i < 3; i++) {
             slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
             REQUIRE(response.action == FTX_QSO_ACTION_TX);
@@ -270,15 +270,29 @@ TEST_CASE("Auto mode SNR", "[ft8_qso]") {
         REQUIRE(response.action == FTX_QSO_ACTION_RX);
     }
 
+    SECTION("In-progress QSO replies are not blacklisted") {
+        slot(&ctx, {make_msg("R2RFE EA0DX -08", 4)}, &response);
+        REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE R+04"));
+        for (int i = 0; i < 5; i++) {
+            slot(&ctx, {make_msg("R2RFE EA0DX -08", 4)}, &response);
+            REQUIRE(response.action == FTX_QSO_ACTION_TX);
+            REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE R+04"));
+        }
+    }
+
     SECTION("Final 73 to me is not answered") {
         slot(&ctx, {make_msg("R2RFE EA0DX 73", 5)}, &response);
         REQUIRE(response.action == FTX_QSO_ACTION_RX);
     }
 
-    SECTION("Tail-end when nothing better is around") {
+    SECTION("Tail-end stops after three sends") {
+        for (int i = 0; i < 3; i++) {
+            slot(&ctx, {make_msg("JA1XYZ EA0DX RR73", 5)}, &response);
+            REQUIRE(response.action == FTX_QSO_ACTION_TX);
+            REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
+        }
         slot(&ctx, {make_msg("JA1XYZ EA0DX RR73", 5)}, &response);
-        REQUIRE(response.action == FTX_QSO_ACTION_TX);
-        REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
+        REQUIRE(response.action == FTX_QSO_ACTION_RX);
     }
 }
 
@@ -663,7 +677,7 @@ TEST_CASE("Clear decision state resets the auto blacklist", "[ft8_qso]") {
     ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_PRE);
     ftx_qso_response_t response;
 
-    /* The same reply text is allowed three times, then blacklisted. */
+    /* Initiating reply (order ≤ 2) is allowed three times, then blacklisted. */
     for (int i = 0; i < 3; i++) {
         slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);

@@ -31,7 +31,7 @@ extern "C" {
 namespace {
 
 constexpr int STICKY_RETRY_MAX  = 5;  /* manual: retries while the peer is silent */
-constexpr int AUTO_TX_TEXT_MAX  = 3;  /* auto: same TX text sent at most 3 times */
+constexpr int AUTO_TX_TEXT_MAX  = 3;  /* auto: initiate (order ≤ 2) at most 3 times */
 constexpr int SNR_REPORT_MIN    = -30;
 constexpr int SNR_REPORT_MAX    = 30;
 
@@ -543,9 +543,12 @@ void auto_decide(const ftx_qso_context_t *ctx,
          * with an already worked tuple; replies (order >= 3) keep flowing
          * once the peer calls us. */
         if (msgs[i].worked && (cand.order <= 2)) continue;
-        /* ft8d tx_blacklist: same TX text at most AUTO_TX_TEXT_MAX times. */
-        BlacklistEntry *e = blacklist_find(cand.text);
-        if (e && e->count >= AUTO_TX_TEXT_MAX) continue;
+        /* Initiate only (order ≤ 2): CQ reply or tail-end — peer has not
+         * called us yet. Higher orders mean an active QSO — no repeat cap. */
+        if (cand.order <= 2) {
+            BlacklistEntry *e = blacklist_find(cand.text);
+            if (e && e->count >= AUTO_TX_TEXT_MAX) continue;
+        }
         cand.grid_worked = msgs[i].grid_worked;
         cands[n++] = cand;
     }
@@ -620,7 +623,9 @@ void auto_decide(const ftx_qso_context_t *ctx,
             break;
     }
 
-    blacklist_bump(cands[pick].text);
+    if (cands[pick].order <= 2) {
+        blacklist_bump(cands[pick].text);
+    }
     copy_str(g_state.last_call, sizeof(g_state.last_call), cands[pick].call);
     emit_candidate(ctx, &cands[pick], false, response);
 }
