@@ -1,5 +1,7 @@
 #include "tx_log.h"
 
+#include <aether_radio/x6100_control/low/control.h>
+
 #include <errno.h>
 #include <execinfo.h>
 #include <pthread.h>
@@ -17,6 +19,7 @@ typedef struct tx_log_item_s {
     int32_t freq_hz;
     int32_t mode;
     float pwr;
+    uint32_t sple_shadow;
     char event[32];
     char detail[128];
     int stack_size;
@@ -62,6 +65,19 @@ static void tx_log_open_file(void) {
     tx_log_fp = fopen(path, "a");
 }
 
+static void tx_log_format_sple(uint32_t sple, char *buf, size_t bufsz) {
+    if (!buf || bufsz == 0) {
+        return;
+    }
+    snprintf(buf, bufsz,
+        "0x%x modem=%d iptt=%d atu_tune=%d swrscan=%d",
+        sple,
+        (sple & x6100_modem_trx) != 0,
+        (sple & x6100_iptt) != 0,
+        (sple & x6100_atu_tune) != 0,
+        (sple & x6100_swrscan_trx) != 0);
+}
+
 static void tx_log_write_item(tx_log_item_t *item) {
     if (!item) {
         return;
@@ -82,13 +98,17 @@ static void tx_log_write_item(tx_log_item_t *item) {
             }
         }
 
+        char sple_buf[64];
+        tx_log_format_sple(item->sple_shadow, sple_buf, sizeof(sple_buf));
+
         fprintf(tx_log_fp,
-            "ts=%s event=%s freq=%d mode=%d pwr=%.2f detail=%s\n",
+            "ts=%s event=%s freq=%d mode=%d pwr=%.2f sple=%s detail=%s\n",
             ts[0] ? ts : "unknown",
             item->event,
             item->freq_hz,
             item->mode,
             item->pwr,
+            sple_buf,
             item->detail[0] ? item->detail : "-"
         );
 
@@ -155,6 +175,7 @@ void tx_log_event(const char *event, int32_t freq_hz, int32_t mode, float pwr, c
     item->freq_hz = freq_hz;
     item->mode = mode;
     item->pwr = pwr;
+    item->sple_shadow = x6100_control_get(x6100_sple_atue_trx);
     strncpy(item->event, event, sizeof(item->event) - 1);
     if (detail) {
         strncpy(item->detail, detail, sizeof(item->detail) - 1);
