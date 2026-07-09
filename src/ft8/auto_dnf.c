@@ -63,7 +63,11 @@ struct auto_dnf_ctx_s {
     /* Override state. */
     bool        override_active;
     uint64_t    active_slot_start;
-    uint64_t    clear_scheduled_slot_start;
+
+    /* One-shot wall-clock clear timer (UI thread). Armed on apply to fire
+     * at slot_end - clear_time_sec; independent of PSD so TX stalls or
+     * missed audio frames cannot leave the notch stuck across slots. */
+    lv_timer_t *clear_timer;
 
     /* Per-slot scan state. */
     uint64_t    slot_seen;                 /* last slot we reset max-pool for */
@@ -135,7 +139,7 @@ static void overlay_show(auto_dnf_ctx_t *ctx,
     lv_obj_clear_flag(ctx->label,  LV_OBJ_FLAG_HIDDEN);
 }
 
-/* ---------- scheduler trampolines (UI thread) ------------------------- */
+/* ---------- apply / clear (UI thread) --------------------------------- */
 
 typedef struct {
     uint16_t center_hz;
@@ -145,11 +149,89 @@ typedef struct {
     bool     apply_dnf;
 } apply_msg_t;
 
-typedef struct {
-    uint64_t slot_start;
-} clear_msg_t;
-
 static void do_restore_now(auto_dnf_ctx_t *ctx);
+static void clear_timer_stop(auto_dnf_ctx_t *ctx);
+static void clear_timer_arm(auto_dnf_ctx_t *ctx);
+
+static uint64_t wall_slot_id(void) {
+    struct timespec ts_now;
+    clock_gettime(CLOCK_REALTIME, &ts_now);
+    int proto = subject_get_int(cfg.ft8_protocol.val);
+    uint64_t slot_ns = (proto == FTX_PROTOCOL_FT4) ? 7500000000ULL : 15000000000ULL;
+    uint64_t epoch_ns = (uint64_t)ts_now.tv_sec * 1000000000ULL + (uint64_t)ts_now.tv_nsec;
+    return epoch_ns / slot_ns;
+}
+
+static float wall_sec_in_slot(uint64_t *out_slot_id) {
+    struct timespec ts_now;
+    clock_gettime(CLOCK_REALTIME, &ts_now);
+    int proto = subject_get_int(cfg.ft8_protocol.val);
+    uint64_t slot_ns = (proto == FTX_PROTOCOL_FT4) ? 7500000000ULL : 15000000000ULL;
+    uint64_t epoch_ns = (uint64_t)ts_now.tv_sec * 1000000000ULL + (uint64_t)ts_now.tv_nsec;
+    uint64_t slot_id = epoch_ns / slot_ns;
+    if (out_slot_id) *out_slot_id = slot_id;
+    return (float)(epoch_ns - slot_id * slot_ns) / 1.0e9f;
+}
+
+/*
+ * One-shot via lv_timer_set_repeat_count(..., 1): after the cb returns,
+ * lv_timer_exec deletes the timer (lv_timer.c). Do NOT lv_timer_del here —
+ * that would double-free with exec. Only clear ctx->clear_timer if it still
+ * points at this timer (same pattern as dialog_ft8 msg_timer).
+ */
+static void clear_timer_cb(lv_timer_t *t) {
+    auto_dnf_ctx_t *ctx = t ? (auto_dnf_ctx_t *)t->user_data : NULL;
+
+    if (ctx && ctx->clear_timer == t) {
+        ctx->clear_timer = NULL;
+    }
+
+    if (!ctx || ctx != g_self || !ctx->override_active) return;
+
+    /* Late fire after slot boundary: still restore (cross-slot safety). */
+    do_restore_now(ctx);
+}
+
+/* Cancel an armed but not-yet-fired timer. Safe to call from UI thread;
+ * null the pointer before del so a concurrent cb cannot double-clear. */
+static void clear_timer_stop(auto_dnf_ctx_t *ctx) {
+    if (!ctx || !ctx->clear_timer) return;
+    lv_timer_t *t = ctx->clear_timer;
+    ctx->clear_timer = NULL;
+    lv_timer_del(t);
+}
+
+static void clear_timer_arm(auto_dnf_ctx_t *ctx) {
+    if (!ctx) return;
+
+    clear_timer_stop(ctx);
+
+    int proto = subject_get_int(cfg.ft8_protocol.val);
+    float slot_period = (proto == FTX_PROTOCOL_FT4) ? FT4_SLOT_TIME : FT8_SLOT_TIME;
+    float clear_at = slot_period - ctx->tuning.clear_time_sec;
+
+    uint64_t wall_slot = 0;
+    float wall_sec = wall_sec_in_slot(&wall_slot);
+
+    /* Already at/past the clear deadline (or wrong slot) — clear now. */
+    if ((ctx->active_slot_start != 0 && wall_slot != ctx->active_slot_start) ||
+        wall_sec >= clear_at) {
+        do_restore_now(ctx);
+        return;
+    }
+
+    float remain_sec = clear_at - wall_sec;
+    uint32_t delay_ms = (uint32_t)(remain_sec * 1000.0f + 0.5f);
+    if (delay_ms < 1) delay_ms = 1;
+
+    ctx->clear_timer = lv_timer_create(clear_timer_cb, delay_ms, ctx);
+    if (!ctx->clear_timer) {
+        do_restore_now(ctx);
+        return;
+    }
+    /* One-shot: exec auto-deletes when repeat_count hits 0; cb must not del. */
+    lv_timer_set_repeat_count(ctx->clear_timer, 1);
+}
 
 static void apply_cb(void *arg) {
     auto_dnf_ctx_t *ctx = g_self;
@@ -157,13 +239,7 @@ static void apply_cb(void *arg) {
     const apply_msg_t *m = (const apply_msg_t *)arg;
 
     /* Protect against stale scheduler deliveries crossing slot boundaries. */
-    struct timespec ts_now;
-    clock_gettime(CLOCK_REALTIME, &ts_now);
-    int proto = subject_get_int(cfg.ft8_protocol.val);
-    uint64_t slot_ns = (proto == FTX_PROTOCOL_FT4) ? 7500000000ULL : 15000000000ULL;
-    uint64_t epoch_ns = (uint64_t)ts_now.tv_sec * 1000000000ULL + (uint64_t)ts_now.tv_nsec;
-    uint64_t cur_slot_start = epoch_ns / slot_ns;
-    if (m->slot_start != cur_slot_start) return;
+    if (m->slot_start != wall_slot_id()) return;
 
     /* Always update overlay so the user can see the detection even when we
      * don't apply the notch. */
@@ -193,20 +269,12 @@ static void apply_cb(void *arg) {
     /* ft8_log_dnf(slot_start_wall, m->center_hz, m->delta_db); -- disabled §7.6 */
 
     overlay_show(ctx, m->center_hz, m->half_width_hz, m->delta_db, true);
-}
-
-static void clear_cb(void *arg) {
-    auto_dnf_ctx_t *ctx = g_self;
-    if (!ctx || !ctx->override_active) return;
-    const clear_msg_t *m = (const clear_msg_t *)arg;
-    if (m && (m->slot_start != 0) && (ctx->active_slot_start != m->slot_start)) {
-        /* Old-slot clear ran after new-slot apply - ignore. */
-        return;
-    }
-    do_restore_now(ctx);
+    clear_timer_arm(ctx);
 }
 
 static void do_restore_now(auto_dnf_ctx_t *ctx) {
+    if (!ctx) return;
+    clear_timer_stop(ctx);
     if (ctx->override_active && ctx->entry.valid) {
         int cur_dnf    = subject_get_int(cfg.dnf.val);
         int cur_center = subject_get_int(cfg.dnf_center.val);
@@ -218,6 +286,13 @@ static void do_restore_now(auto_dnf_ctx_t *ctx) {
     ctx->override_active = false;
     ctx->active_slot_start = 0;
     overlay_hide(ctx);
+}
+
+/* scheduler_put trampoline for worker-thread TX clear. */
+static void do_restore_now_tramp(void *arg) {
+    LV_UNUSED(arg);
+    auto_dnf_ctx_t *ctx = g_self;
+    if (ctx && ctx->override_active) do_restore_now(ctx);
 }
 
 /* ---------- floor observer callback ----------------------------------- */
@@ -347,42 +422,20 @@ void auto_dnf_on_psd(auto_dnf_ctx_t *ctx,
      * This aligns DNF scan windows with the actual audio, removing
      * the FFT pipeline latency mismatch.
      *
-     * The clear path below uses wall clock separately — the notch must
-     * be removed BEFORE the real slot boundary, not delayed by the
-     * pipeline latency that the PSD timestamp carries. */
+     * Notch clear is NOT done here — apply arms a one-shot UI-thread
+     * lv_timer for wall-clock (slot_end - clear_time_sec), so TX stalls
+     * / missed PSD frames cannot leave the notch stuck into the next slot. */
     int proto = subject_get_int(cfg.ft8_protocol.val);
     uint64_t slot_ns = (proto == FTX_PROTOCOL_FT4) ? 7500000000ULL : 15000000000ULL;
     uint64_t epoch_ns = (uint64_t)frame_ts.tv_sec * 1000000000ULL + (uint64_t)frame_ts.tv_nsec;
     uint64_t slot_start = epoch_ns / slot_ns;
     float sec_since_slot_start = (float)(epoch_ns - slot_start * slot_ns) / 1.0e9f;
 
-    float slot_period = (proto == FTX_PROTOCOL_FT4) ? FT4_SLOT_TIME : FT8_SLOT_TIME;
-
     if (slot_start != ctx->slot_seen) {
-        ctx->slot_seen                    = slot_start;
-        ctx->applied_this_slot            = false;
-        ctx->clear_scheduled_slot_start   = 0;
+        ctx->slot_seen         = slot_start;
+        ctx->applied_this_slot = false;
         for (uint32_t i = low_bin; i < high_bin && i < nfft; i++) {
             ctx->maxpool[i] = -1e9f;
-        }
-    }
-
-    /* Pre-expire the active notch near slot end so the next scan sees
-     * un-notched PSD. Uses wall clock (not PSD frame_ts) so the clear
-     * fires before the real slot boundary, not delayed by pipeline latency. */
-    {
-        struct timespec ts_wall;
-        clock_gettime(CLOCK_REALTIME, &ts_wall);
-        uint64_t wall_ns = (uint64_t)ts_wall.tv_sec * 1000000000ULL + (uint64_t)ts_wall.tv_nsec;
-        uint64_t wall_slot_start = wall_ns / slot_ns;
-        float wall_sec = (float)(wall_ns - wall_slot_start * slot_ns) / 1.0e9f;
-
-        if (ctx->override_active && ctx->active_slot_start != 0 &&
-            ctx->clear_scheduled_slot_start != wall_slot_start &&
-            wall_sec > (slot_period - ctx->tuning.clear_time_sec)) {
-            clear_msg_t m = { .slot_start = ctx->active_slot_start };
-            scheduler_put(clear_cb, &m, sizeof(m));
-            ctx->clear_scheduled_slot_start = wall_slot_start;
         }
     }
 
@@ -403,9 +456,13 @@ void auto_dnf_on_psd(auto_dnf_ctx_t *ctx,
 }
 
 void auto_dnf_clear_for_tx(auto_dnf_ctx_t *ctx) {
-    if (!ctx || !ctx->override_active) return;
-    clear_msg_t m = { .slot_start = ctx->active_slot_start };
-    scheduler_put(clear_cb, &m, sizeof(m));
+    if (!ctx) return;
+    /* TX path runs on the audio worker; bounce restore onto the UI thread
+     * so subject/overlay/timer updates stay single-threaded. Do not gate on
+     * override_active here — the trampoline checks it on the UI thread. */
+    if (!scheduler_put_noargs(do_restore_now_tramp)) {
+        LV_LOG_ERROR("auto_dnf: TX clear schedule failed");
+    }
 }
 
 /* ---------- entry snapshot / restore ---------------------------------- */
@@ -420,6 +477,8 @@ void auto_dnf_snapshot_entry(auto_dnf_ctx_t *ctx) {
 
 void auto_dnf_restore_entry(auto_dnf_ctx_t *ctx) {
     if (!ctx || !ctx->entry.valid) return;
+
+    clear_timer_stop(ctx);
 
     int cur_dnf    = subject_get_int(cfg.dnf.val);
     int cur_center = subject_get_int(cfg.dnf_center.val);
@@ -500,6 +559,8 @@ auto_dnf_ctx_t *auto_dnf_create(const ft8_tuning_t *tuning) {
 
 void auto_dnf_destroy(auto_dnf_ctx_t *ctx) {
     if (!ctx) return;
+
+    clear_timer_stop(ctx);
 
     /* Deleting observers in reverse order of creation. */
     if (ctx->obs_pre)  { observer_del(ctx->obs_pre);  ctx->obs_pre  = NULL; }

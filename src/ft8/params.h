@@ -33,7 +33,7 @@
 typedef struct {
     float scan_start_sec;   /* slot_start-relative scan window begin */
     float scan_end_sec;     /* slot_start-relative scan window end */
-    float clear_time_sec;   /* slot_start-relative clear moment */
+    float clear_time_sec;   /* seconds before slot end to clear notch (wall clock) */
     float min_delta_db;     /* minimum peak prominence to notch */
 } ft8_tuning_t;
 

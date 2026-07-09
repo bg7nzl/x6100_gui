@@ -17,9 +17,10 @@
  *  dialog close even if we crash during teardown.
  *
  *  Threading:
- *    - auto_dnf_on_psd() runs on the worker thread (no LVGL calls).
- *    - UI apply / clear actually happen on the scheduler (UI thread) via
- *      scheduler_put() trampolines owned by this module.
+ *    - auto_dnf_on_psd() runs on the worker thread (no LVGL calls); it only
+ *      scans / detects peaks and schedules apply via scheduler_put().
+ *    - Notch clear is a one-shot lv_timer on the UI thread, armed on apply to
+ *      fire at wall-clock (slot_end - clear_time_sec). Not driven by PSD.
  *    - auto_dnf_snapshot_entry / restore_entry / build_overlay / destroy run
  *      on the UI thread from the dialog lifecycle.
  */
@@ -65,7 +66,8 @@ void auto_dnf_restore_entry(auto_dnf_ctx_t *ctx);
 
 /* Worker-thread hook per waterfall PSD frame.
  * frame_ts is the wall-clock timestamp of the audio this PSD represents
- * (NOT the current wall clock), used for slot-aligned scan/clear timing. */
+ * (NOT the current wall clock), used for slot-aligned scan timing only.
+ * Notch clear is handled by a UI-thread lv_timer, not this path. */
 void auto_dnf_on_psd(auto_dnf_ctx_t *ctx,
                      const float *psd, uint16_t nfft,
                      int32_t sample_rate,
