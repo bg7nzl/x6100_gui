@@ -126,9 +126,26 @@ int adif_read(const char * path, qso_log_record_t ** records) {
     struct tm qso_ts;
     size_t val_len;
 
+    char *rec = NULL;
+    size_t rec_len = 0;
+    size_t rec_cap = 0;
+
     while ((read = getline(&line, &len, fp)) != -1) {
+        size_t append_len = (size_t) read;
+        while (append_len > 0 && (line[append_len - 1] == '\n' || line[append_len - 1] == '\r')) {
+            append_len--;
+        }
+        if (rec_len + append_len + 1 > rec_cap) {
+            rec_cap = (rec_len + append_len + 1) * 2;
+            rec = realloc(rec, rec_cap);
+        }
+        memcpy(rec + rec_len, line, append_len);
+        rec_len += append_len;
+        rec[rec_len] = '\0';
+
         if (!line_has_eor(line, read)) continue;
-        s = line;
+
+        s = rec;
         cur_record = &(*records)[cur_record_id];
         memset(cur_record, 0, sizeof(*cur_record));
         memset(&qso_ts, 0, sizeof(qso_ts));
@@ -198,7 +215,9 @@ int adif_read(const char * path, qso_log_record_t ** records) {
             arr_size *= 2;
             (*records) = realloc((*records), arr_size * sizeof(qso_log_record_t));
         }
+        rec_len = 0;
     }
+    free(rec);
     return cur_record_id--;
 }
 
