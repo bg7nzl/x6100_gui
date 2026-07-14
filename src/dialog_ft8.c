@@ -62,7 +62,7 @@
 
 #define UNKNOWN_SNR     99
 
-#define MAX_PWR         5.0f
+#define MAX_PWR         10.0f
 
 #define FT8_WIDTH_HZ    50
 #define FT4_WIDTH_HZ    83
@@ -239,36 +239,36 @@ static buttons_page_t btn_page_3;
 static buttons_page_t btn_page_4;
 
 static button_data_t button_page_1 = { .type=BTN_TEXT, .label = "(Page: 1:4)", .press = button_next_page_cb, .next=&btn_page_2};
-static button_data_t button_show_cq_all = { .type=BTN_TEXT_FN, .label_fn = cq_all_label_getter, .press = show_cq_all_cb, .subj=&cfg.ft8_show_all.val};
-static button_data_t button_mode_ft4_ft8 = { .type=BTN_TEXT_FN, .label_fn = protocol_label_getter, .press = mode_ft4_ft8_cb, .subj=&cfg.ft8_protocol.val };
+static button_data_t button_free_msg = { .type=BTN_TEXT, .label = "Free\nMSG", .press = free_msg_cb };
 static button_data_t button_tx_cq_en_dis = { .type=BTN_TEXT_FN, .label_fn = tx_cq_label_getter, .press = tx_cq_en_dis_cb };
-static button_data_t button_tx_call_en_dis = { .type=BTN_TEXT_FN, .label_fn = tx_call_label_getter, .press = tx_call_en_dis_cb};
-
-static button_data_t button_page_2 = { .type=BTN_TEXT, .label = "(Page: 2:4)", .press = button_next_page_cb, .next=&btn_page_3};
-static button_data_t button_hold_freq = { .type=BTN_TEXT_FN, .label_fn = hold_freq_label_getter, .press = hold_tx_freq_cb, .subj=&cfg.ft8_hold_freq.val };
 static button_data_t button_auto_en_dis = { .type=BTN_TEXT_FN, .label_fn = auto_label_getter, .press = mode_auto_cb };
 static button_data_t button_auto_mode = { .type=BTN_TEXT_FN, .label_fn = auto_mode_label_getter, .press = mode_auto_sel_cb, .subj=&cfg.ft8_auto_mode.val };
-static button_data_t button_force_save = { .type=BTN_TEXT, .label = "Force QSO\nsave", .press = force_save_qso };
+
+static button_data_t button_page_2 = { .type=BTN_TEXT, .label = "(Page: 2:4)", .press = button_next_page_cb, .next=&btn_page_3};
+static button_data_t button_show_cq_all = { .type=BTN_TEXT_FN, .label_fn = cq_all_label_getter, .press = show_cq_all_cb, .subj=&cfg.ft8_show_all.val};
+static button_data_t button_mode_ft4_ft8 = { .type=BTN_TEXT_FN, .label_fn = protocol_label_getter, .press = mode_ft4_ft8_cb, .subj=&cfg.ft8_protocol.val };
+static button_data_t button_hold_freq = { .type=BTN_TEXT_FN, .label_fn = hold_freq_label_getter, .press = hold_tx_freq_cb, .subj=&cfg.ft8_hold_freq.val };
+static button_data_t button_tx_call_en_dis = { .type=BTN_TEXT_FN, .label_fn = tx_call_label_getter, .press = tx_call_en_dis_cb};
 
 static button_data_t button_page_3 = { .type=BTN_TEXT, .label = "(Page: 3:4)", .press = button_next_page_cb, .next=&btn_page_4};
+static button_data_t button_force_save = { .type=BTN_TEXT, .label = "Force QSO\nsave", .press = force_save_qso };
 static button_data_t button_cq_mod = { .type=BTN_TEXT, .label = "CQ\nModifier", .press = cq_modifier_cb };
 static button_data_t button_time_sync = { .type=BTN_TEXT, .label = "Time\nSync", .press = time_sync };
-static button_data_t button_free_msg = { .type=BTN_TEXT, .label = "Free\nMSG", .press = free_msg_cb };
 static button_data_t button_auto_dnf = { .type=BTN_TEXT_FN, .label_fn = auto_dnf_label_getter, .press = auto_dnf_cb, .subj=&cfg.ft8_auto_dnf.val };
 
 static button_data_t button_page_4 = { .type=BTN_TEXT, .label = "(Page: 4:4)", .press = button_next_page_cb, .next=&btn_page_1};
 static button_data_t button_processor = { .type=BTN_TEXT_FN, .label_fn = processor_label_getter, .press = mode_processor_cb };
 
 static buttons_page_t btn_page_1 = {
-    {&button_page_1, &button_show_cq_all, &button_mode_ft4_ft8, &button_tx_cq_en_dis, &button_tx_call_en_dis}
+    {&button_page_1, &button_free_msg, &button_tx_cq_en_dis, &button_auto_en_dis, &button_auto_mode}
 };
 
 static buttons_page_t btn_page_2 = {
-    {&button_page_2, &button_hold_freq, &button_auto_en_dis, &button_auto_mode, &button_force_save}
+    {&button_page_2, &button_show_cq_all, &button_mode_ft4_ft8, &button_hold_freq, &button_tx_call_en_dis}
 };
 
 static buttons_page_t btn_page_3 = {
-    {&button_page_3, &button_cq_mod, &button_time_sync, &button_free_msg, &button_auto_dnf}
+    {&button_page_3, &button_force_save, &button_cq_mod, &button_time_sync, &button_auto_dnf}
 };
 
 static buttons_page_t btn_page_4 = {
