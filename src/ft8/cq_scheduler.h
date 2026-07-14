@@ -24,8 +24,9 @@ extern "C" {
  *   "CQ_<mod> <callsign> <grid>"         (with modifier)
  * The result is written to 'out' (caller-allocated). Behaviour matches
  * the historical make_cq_msg() in dialog_ft8.c: the message is round-
- * tripped through ftx_message_{encode,decode} for validation, and any
- * codec error is logged via LV_LOG_USER but does NOT clear 'out'. */
+ * tripped through ftx_message_{encode,decode} for validation without
+ * replacing the encoder form with decoded display text. Any codec error
+ * is logged via LV_LOG_USER but does NOT clear 'out'. */
 void cq_make_message(const char *callsign,
                      const char *qth,
                      const char *cq_mod,

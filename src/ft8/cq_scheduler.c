@@ -20,6 +20,7 @@ void cq_make_message(const char *callsign,
                      const char *cq_mod,
                      char       *out) {
     char buf[128];
+    char decoded[128];
     if (strlen(cq_mod)) {
         snprintf(buf, FTX_MAX_MESSAGE_LENGTH, "CQ_%s %s %.4s", cq_mod, callsign, qth);
     } else {
@@ -31,10 +32,11 @@ void cq_make_message(const char *callsign,
     rc = ftx_message_encode(&msg, NULL, buf);
     if (rc != FTX_MESSAGE_RC_OK) {
         LV_LOG_USER("Error: %d while encoding message: '%s'", rc, buf);
-    }
-    rc = ftx_message_decode(&msg, NULL, buf);
-    if (rc != FTX_MESSAGE_RC_OK) {
-        LV_LOG_USER("Error: %d while decoding message: '%s'", rc, buf);
+    } else {
+        rc = ftx_message_decode(&msg, NULL, decoded);
+        if (rc != FTX_MESSAGE_RC_OK) {
+            LV_LOG_USER("Error: %d while decoding message: '%s'", rc, buf);
+        }
     }
     strcpy(out, buf);
 }
