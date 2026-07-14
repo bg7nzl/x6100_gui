@@ -65,6 +65,7 @@ typedef enum {
 bool qso_log_init();
 
 int qso_log_record_save(qso_log_record_t qso);
+int qso_log_record_save_contest(qso_log_record_t qso);
 
 void qso_log_import_adif(const char *path);
 
@@ -81,6 +82,7 @@ qso_log_record_t qso_log_record_create(const char *local_call, const char *remot
  * Search callsign in log.
  */
 qso_log_search_worked_t qso_log_search_worked(const char *callsign, qso_log_mode_t mode, qso_log_band_t band);
+qso_log_search_worked_t qso_log_search_worked_contest(const char *callsign, qso_log_mode_t mode, qso_log_band_t band);
 
 /**
  * True when the (local call, local grid4, band, mode, remote call, remote grid4)
@@ -90,6 +92,9 @@ qso_log_search_worked_t qso_log_search_worked(const char *callsign, qso_log_mode
 bool qso_log_worked_pair(const char *local_call, const char *local_grid4,
                          qso_log_mode_t mode, qso_log_band_t band,
                          const char *remote_call, const char *remote_grid4);
+bool qso_log_worked_pair_contest(const char *local_call, const char *local_grid4,
+                                 qso_log_mode_t mode, qso_log_band_t band,
+                                 const char *remote_call, const char *remote_grid4);
 
 /**
  * True when any station in remote_grid4 was already worked from
@@ -98,6 +103,9 @@ bool qso_log_worked_pair(const char *local_call, const char *local_grid4,
 bool qso_log_worked_grid(const char *local_call, const char *local_grid4,
                          qso_log_mode_t mode, qso_log_band_t band,
                          const char *remote_grid4);
+bool qso_log_worked_grid_contest(const char *local_call, const char *local_grid4,
+                                 qso_log_mode_t mode, qso_log_band_t band,
+                                 const char *remote_grid4);
 
 
 qso_log_band_t qso_log_freq_to_band(uint64_t freq_hz);

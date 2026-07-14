@@ -13,6 +13,8 @@ typedef enum {
     FTX_MSG_TYPE_REPORT,
     // "CALL1 CALL2 R+1"
     FTX_MSG_TYPE_R_REPORT,
+    // "CALL1 CALL2 R GRID" (NA VHF / ARRL Digital contest)
+    FTX_MSG_TYPE_R_GRID,
     // "CALL1 CALL2 RR73"
     FTX_MSG_TYPE_RR73,
     // "CALL1 CALL2 73"
@@ -61,11 +63,20 @@ typedef enum {
     FTX_QSO_SEL_NEW_GRID,
 } ftx_qso_sel_t;
 
+/* QSO processor profile (the "Processor" button). NORMAL is everyday FT8;
+ * NA_VHF exchanges grids (R grid) instead of signal reports by default and
+ * never tail-ends. Mixed-protocol follow still works in both profiles. */
+typedef enum {
+    FTX_QSO_PROC_NORMAL = 0,
+    FTX_QSO_PROC_NA_VHF,
+} ftx_qso_proc_t;
+
 typedef struct {
     const char    *local_callsign;
     const char    *local_qth;
     ftx_qso_auto_t auto_level;
     ftx_qso_sel_t  sel;
+    ftx_qso_proc_t proc;
     /* Wall clock of the call (the engine itself never reads the clock);
      * used for QSO start/end timestamps. */
     time_t         now;

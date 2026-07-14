@@ -10,13 +10,15 @@ using Catch::Matchers::Equals;
 static constexpr time_t TEST_NOW = 1700000000;
 
 static ftx_qso_context_t test_ctx(ftx_qso_auto_t level = FTX_QSO_AUTO_OFF,
-                                  ftx_qso_sel_t sel = FTX_QSO_SEL_SNR) {
+                                  ftx_qso_sel_t sel = FTX_QSO_SEL_SNR,
+                                  ftx_qso_proc_t proc = FTX_QSO_PROC_NORMAL) {
     ftx_qso_reset();
     ftx_qso_context_t ctx = {
         .local_callsign = "R2RFE",
         .local_qth      = "LO02rq",
         .auto_level     = level,
         .sel            = sel,
+        .proc           = proc,
         .now            = TEST_NOW,
     };
     return ctx;
@@ -97,6 +99,21 @@ TEST_CASE("Parse decoded message meta", "[ft8_qso]") {
         REQUIRE(meta.type == FXT_MSG_TYPE_OTHER);
         ftx_qso_parse_rx_text(&ctx, "R2RFE EA0DX R-", 5, 0.0f, 0.0f, &meta);
         REQUIRE(meta.type == FXT_MSG_TYPE_OTHER);
+    }
+
+    SECTION("R-grid contest exchange") {
+        ftx_qso_parse_rx_text(&ctx, "W9XYZ K1ABC R FN42", 5, 0.0f, 0.0f, &meta);
+        REQUIRE(meta.type == FTX_MSG_TYPE_R_GRID);
+        REQUIRE(!meta.to_me);
+        REQUIRE_THAT(meta.call_de, Equals("K1ABC"));
+        REQUIRE_THAT(meta.grid, Equals("FN42"));
+    }
+
+    SECTION("CQ TEST with grid") {
+        ftx_qso_parse_rx_text(&ctx, "CQ TEST K1ABC FN42", 5, 0.0f, 0.0f, &meta);
+        REQUIRE(meta.type == FTX_MSG_TYPE_CQ);
+        REQUIRE_THAT(meta.call_de, Equals("K1ABC"));
+        REQUIRE_THAT(meta.grid, Equals("FN42"));
     }
 }
 
@@ -688,4 +705,151 @@ TEST_CASE("Clear decision state resets the auto blacklist", "[ft8_qso]") {
     ftx_qso_clear_decision_state();
     slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
     REQUIRE(response.action == FTX_QSO_ACTION_TX);
+}
+
+TEST_CASE("NA VHF: answer all CQs with grid reply", "[ft8_qso]") {
+    ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_FULL, FTX_QSO_SEL_SNR,
+                                     FTX_QSO_PROC_NA_VHF);
+    ftx_qso_response_t response;
+
+    SECTION("CQ without TEST") {
+        slot(&ctx, {make_msg("CQ K1ABC FN42", 5)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE LO02"));
+    }
+
+    SECTION("CQ TEST yields the same reply text") {
+        slot(&ctx, {make_msg("CQ TEST K1ABC FN42", 5)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE LO02"));
+    }
+}
+
+TEST_CASE("NA VHF: full sequence answering their CQ", "[ft8_qso]") {
+    ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_OFF, FTX_QSO_SEL_SNR,
+                                     FTX_QSO_PROC_NA_VHF);
+    ftx_qso_response_t response;
+
+    ftx_qso_on_user_message(&ctx, "CQ TEST K1ABC FN42", 9, 1000.0f, true, &response);
+    REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE LO02"));
+    REQUIRE(!response.save);
+
+    ctx.now = TEST_NOW + 30;
+    slot(&ctx, {make_msg("R2RFE K1ABC R FN42", 4)}, &response);
+    REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE RR73"));
+    REQUIRE(response.save);
+    REQUIRE_THAT(response.qso.call, Equals("K1ABC"));
+    REQUIRE_THAT(response.qso.grid, Equals("FN42"));
+    REQUIRE(response.qso.rst_sent == 9); /* SNR at CQ answer (order 2) */
+    REQUIRE(response.qso.start_time == TEST_NOW);
+    REQUIRE(response.qso.end_time == TEST_NOW + 30);
+
+    slot(&ctx, {make_msg("R2RFE K1ABC RR73", 4)}, &response);
+    REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE 73"));
+    REQUIRE(!response.save);
+}
+
+TEST_CASE("NA VHF: full sequence when called with their grid", "[ft8_qso]") {
+    ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_OFF, FTX_QSO_SEL_SNR,
+                                     FTX_QSO_PROC_NA_VHF);
+    ftx_qso_response_t response;
+
+    ftx_qso_on_user_message(&ctx, "R2RFE K1ABC FN42", -5, 0.0f, true, &response);
+    REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE R LO02"));
+    REQUIRE(!response.save);
+
+    ctx.now = TEST_NOW + 30;
+    slot(&ctx, {make_msg("R2RFE K1ABC RR73", 4)}, &response);
+    REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE 73"));
+    REQUIRE(response.save);
+    REQUIRE_THAT(response.qso.call, Equals("K1ABC"));
+    REQUIRE_THAT(response.qso.grid, Equals("FN42"));
+    REQUIRE(response.qso.rst_sent == -5);
+}
+
+TEST_CASE("NA VHF: protocol follow and defaults", "[ft8_qso]") {
+    ftx_qso_response_t response;
+
+    SECTION("GRID defaults to R-grid reply") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_OFF, FTX_QSO_SEL_SNR,
+                                         FTX_QSO_PROC_NA_VHF);
+        ftx_qso_on_user_message(&ctx, "R2RFE K1ABC FN42", 3, 0.0f, true, &response);
+        REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE R LO02"));
+    }
+
+    SECTION("Signal report follows report protocol") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_OFF, FTX_QSO_SEL_SNR,
+                                         FTX_QSO_PROC_NA_VHF);
+        ftx_qso_on_user_message(&ctx, "CQ K1ABC FN42", 9, 0.0f, true, &response);
+        slot(&ctx, {make_msg("R2RFE K1ABC -08", 4)}, &response);
+        REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE R+04"));
+        slot(&ctx, {make_msg("R2RFE K1ABC RR73", 4)}, &response);
+        REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE 73"));
+        REQUIRE(response.save);
+    }
+
+    SECTION("Normal profile answers R-grid with RR73") {
+        ftx_qso_context_t ctx = test_ctx();
+        ftx_qso_on_user_message(&ctx, "R2RFE K1ABC R FN42", 3, 0.0f, true, &response);
+        REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE RR73"));
+    }
+}
+
+TEST_CASE("NA VHF: no tail-end preempt", "[ft8_qso]") {
+    ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_PRE, FTX_QSO_SEL_SNR,
+                                     FTX_QSO_PROC_NA_VHF);
+    ftx_qso_response_t response;
+
+    slot(&ctx, {make_msg("JA1XYZ K1ABC RR73", 5)}, &response);
+    REQUIRE(response.action == FTX_QSO_ACTION_RX);
+
+    slot(&ctx, {make_msg("JA1XYZ K1ABC 73", 5)}, &response);
+    REQUIRE(response.action == FTX_QSO_ACTION_RX);
+}
+
+TEST_CASE("NA VHF: relaxed complete on peer RR73 skip", "[ft8_qso]") {
+    ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_OFF, FTX_QSO_SEL_SNR,
+                                     FTX_QSO_PROC_NA_VHF);
+    ftx_qso_response_t response;
+    ftx_qso_record_t records[4];
+
+    /* Answer their CQ (grid from CQ), peer skips R-grid and sends RR73. */
+    ftx_qso_on_user_message(&ctx, "CQ K1ABC FN42", 9, 0.0f, true, &response);
+    REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE LO02"));
+
+    ctx.now = TEST_NOW + 30;
+    slot(&ctx, {make_msg("R2RFE K1ABC RR73", 4)}, &response);
+    REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE 73"));
+    REQUIRE(response.save);
+    REQUIRE_THAT(response.qso.grid, Equals("FN42"));
+
+    /* Repeat RR73: reply only, no duplicate save. */
+    slot(&ctx, {make_msg("R2RFE K1ABC RR73", 4)}, &response);
+    REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE 73"));
+    REQUIRE(!response.save);
+
+    /* Answer CQ then peer vanishes: no flush ghost (exch_sent only). */
+    ftx_qso_on_user_message(&ctx, "CQ W9XYZ EN37", 5, 0.0f, true, &response);
+    REQUIRE(ftx_qso_flush_complete(records, 4) == 0);
+}
+
+TEST_CASE("NA VHF: sticky and /R rover callsign", "[ft8_qso]") {
+    ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_OFF, FTX_QSO_SEL_SNR,
+                                     FTX_QSO_PROC_NA_VHF);
+    ftx_qso_response_t response;
+
+    ftx_qso_on_user_message(&ctx, "CQ TEST K1ABC/R FN42", 9, 0.0f, true, &response);
+    REQUIRE_THAT(response.tx_msg, Equals("K1ABC/R R2RFE LO02"));
+
+    for (int i = 0; i < 5; i++) {
+        slot(&ctx, {}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE_THAT(response.tx_msg, Equals("K1ABC/R R2RFE LO02"));
+    }
+
+    slot(&ctx, {make_msg("R2RFE K1ABC/R R FN42", 4)}, &response);
+    REQUIRE_THAT(response.tx_msg, Equals("K1ABC/R R2RFE RR73"));
+    REQUIRE(response.save);
+    REQUIRE_THAT(response.qso.call, Equals("K1ABC/R"));
+    REQUIRE_THAT(response.qso.grid, Equals("FN42"));
 }

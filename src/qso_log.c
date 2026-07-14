@@ -20,6 +20,7 @@
 #include <stdio.h>
 
 static sqlite3_stmt     *search_callsign_stmt=NULL;
+static sqlite3_stmt     *search_callsign_contest_stmt=NULL;
 static sqlite3_stmt     *worked_pair_stmt=NULL;
 static sqlite3_stmt     *worked_grid_stmt=NULL;
 static sqlite3          *db = NULL;
@@ -152,9 +153,10 @@ static inline int bind_optional_text(sqlite3_stmt * stmt, int pos, const char * 
     }
 }
 
-int qso_log_record_save(qso_log_record_t qso) {
+static int qso_log_record_save_table(qso_log_record_t qso, const char *table) {
     sqlite3_stmt    *stmt;
     int             rc;
+    char            sql[512];
 
     if (strlen(qso.local_call) == 0) {
         LV_LOG_ERROR("Local callsign is required");
@@ -165,13 +167,14 @@ int qso_log_record_save(qso_log_record_t qso) {
         return -1;
     }
 
-    rc = sqlite3_prepare_v2(
-        db, "INSERT OR IGNORE INTO qso_log ("
-                "ts, freq, band, mode, local_callsign, remote_callsign, rsts, rstr, "
-                "local_grid, remote_grid, op_name, canonized_remote_callsign"
-            ") VALUES (datetime(:ts, 'unixepoch'), :freq, :band, :mode, :local_callsign, :remote_callsign, "
-                ":rsts, :rstr, :local_grid, :remote_grid, :op_name, :canonized_remote_callsign)",
-                       -1, &stmt, 0);
+    snprintf(sql, sizeof(sql),
+        "INSERT OR IGNORE INTO %s ("
+            "ts, freq, band, mode, local_callsign, remote_callsign, rsts, rstr, "
+            "local_grid, remote_grid, op_name, canonized_remote_callsign"
+        ") VALUES (datetime(:ts, 'unixepoch'), :freq, :band, :mode, :local_callsign, :remote_callsign, "
+            ":rsts, :rstr, :local_grid, :remote_grid, :op_name, :canonized_remote_callsign)",
+        table);
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (rc != SQLITE_OK) {
         LV_LOG_ERROR("Error in prepairing query");
         return -1;
@@ -229,37 +232,52 @@ int qso_log_record_save(qso_log_record_t qso) {
     return changed;
 }
 
+int qso_log_record_save(qso_log_record_t qso) {
+    return qso_log_record_save_table(qso, "qso_log");
+}
 
-qso_log_search_worked_t qso_log_search_worked(const char *callsign, qso_log_mode_t mode, qso_log_band_t band)
+int qso_log_record_save_contest(qso_log_record_t qso) {
+    return qso_log_record_save_table(qso, "contest_qso_log");
+}
+
+
+static qso_log_search_worked_t search_worked_table(const char *callsign,
+                                                   qso_log_mode_t mode,
+                                                   qso_log_band_t band,
+                                                   const char *table,
+                                                   sqlite3_stmt **stmt_slot)
 {
     int                         rc;
     qso_log_search_worked_t     worked = SEARCH_WORKED_NO;
+    char                        sql[160];
 
-    if (!search_callsign_stmt) {
-        rc = sqlite3_prepare_v3(db, "SELECT DISTINCT band, mode FROM qso_log WHERE canonized_remote_callsign LIKE ?",
-                        -1, SQLITE_PREPARE_PERSISTENT, &search_callsign_stmt, 0);
+    if (!*stmt_slot) {
+        snprintf(sql, sizeof(sql),
+                 "SELECT DISTINCT band, mode FROM %s WHERE canonized_remote_callsign LIKE ?",
+                 table);
+        rc = sqlite3_prepare_v3(db, sql, -1, SQLITE_PREPARE_PERSISTENT, stmt_slot, 0);
         if (rc != SQLITE_OK) {
             return -1;
         }
     } else {
-        sqlite3_reset(search_callsign_stmt);
-        sqlite3_clear_bindings(search_callsign_stmt);
+        sqlite3_reset(*stmt_slot);
+        sqlite3_clear_bindings(*stmt_slot);
     }
 
     char * canonized_callsign = util_canonize_callsign(callsign, true);
     if (!canonized_callsign) {
         canonized_callsign = strdup(callsign);
     }
-    rc = sqlite3_bind_text(search_callsign_stmt, 1, canonized_callsign, strlen(canonized_callsign), 0);
+    rc = sqlite3_bind_text(*stmt_slot, 1, canonized_callsign, strlen(canonized_callsign), 0);
     if (rc != SQLITE_OK) {
         free(canonized_callsign);
         return -1;
     }
 
-    while (sqlite3_step(search_callsign_stmt) != SQLITE_DONE) {
+    while (sqlite3_step(*stmt_slot) != SQLITE_DONE) {
         worked = SEARCH_WORKED_YES;
-        if ((sqlite3_column_int(search_callsign_stmt, 0) == band) &&
-            (sqlite3_column_int(search_callsign_stmt, 1) == mode))
+        if ((sqlite3_column_int(*stmt_slot, 0) == band) &&
+            (sqlite3_column_int(*stmt_slot, 1) == mode))
         {
             worked = SEARCH_WORKED_SAME_MODE;
             break;
@@ -268,6 +286,17 @@ qso_log_search_worked_t qso_log_search_worked(const char *callsign, qso_log_mode
 
     free(canonized_callsign);
     return worked;
+}
+
+qso_log_search_worked_t qso_log_search_worked(const char *callsign, qso_log_mode_t mode, qso_log_band_t band)
+{
+    return search_worked_table(callsign, mode, band, "qso_log", &search_callsign_stmt);
+}
+
+qso_log_search_worked_t qso_log_search_worked_contest(const char *callsign, qso_log_mode_t mode, qso_log_band_t band)
+{
+    return search_worked_table(callsign, mode, band, "contest_qso_log",
+                               &search_callsign_contest_stmt);
 }
 
 
@@ -289,47 +318,96 @@ static void bind_worked_tuple(sqlite3_stmt *stmt, const char *local_call,
     sqlite3_bind_int(stmt, sqlite3_bind_parameter_index(stmt, ":mode"), mode);
 }
 
+static bool worked_pair_table(const char *local_call, const char *local_grid4,
+                              qso_log_mode_t mode, qso_log_band_t band,
+                              const char *remote_call, const char *remote_grid4,
+                              const char *table, sqlite3_stmt **stmt_slot)
+{
+    if (!db || !local_call || !remote_call) return false;
+
+    if (!*stmt_slot) {
+        char sql[512];
+        snprintf(sql, sizeof(sql),
+            "SELECT 1 FROM %s WHERE " WORKED_TUPLE_SQL
+                "AND canonized_remote_callsign = :rc COLLATE NOCASE "
+                "AND (:rg = '' OR COALESCE(remote_grid,'') = '' "
+                    "OR substr(remote_grid,1,4) = :rg COLLATE NOCASE) "
+            "LIMIT 1",
+            table);
+        int rc = sqlite3_prepare_v3(db, sql, -1, SQLITE_PREPARE_PERSISTENT, stmt_slot, 0);
+        if (rc != SQLITE_OK) {
+            LV_LOG_ERROR("Can't prepare worked_pair query");
+            *stmt_slot = NULL;
+            return false;
+        }
+    } else {
+        sqlite3_reset(*stmt_slot);
+        sqlite3_clear_bindings(*stmt_slot);
+    }
+
+    bind_worked_tuple(*stmt_slot, local_call, local_grid4, mode, band);
+
+    char *canonized = util_canonize_callsign(remote_call, true);
+    const char *rc_val = canonized ? canonized : remote_call;
+    sqlite3_bind_text(*stmt_slot, sqlite3_bind_parameter_index(*stmt_slot, ":rc"),
+                      rc_val, strlen(rc_val), 0);
+    const char *rg = remote_grid4 ? remote_grid4 : "";
+    sqlite3_bind_text(*stmt_slot, sqlite3_bind_parameter_index(*stmt_slot, ":rg"),
+                      rg, strlen(rg), 0);
+
+    bool worked = (sqlite3_step(*stmt_slot) == SQLITE_ROW);
+    free(canonized);
+    return worked;
+}
+
 bool qso_log_worked_pair(const char *local_call, const char *local_grid4,
                          qso_log_mode_t mode, qso_log_band_t band,
                          const char *remote_call, const char *remote_grid4)
 {
     static sqlite3_stmt *stmt = NULL;
+    return worked_pair_table(local_call, local_grid4, mode, band,
+                             remote_call, remote_grid4, "qso_log", &stmt);
+}
 
-    if (!db || !local_call || !remote_call) return false;
+bool qso_log_worked_pair_contest(const char *local_call, const char *local_grid4,
+                                 qso_log_mode_t mode, qso_log_band_t band,
+                                 const char *remote_call, const char *remote_grid4)
+{
+    static sqlite3_stmt *stmt = NULL;
+    return worked_pair_table(local_call, local_grid4, mode, band,
+                             remote_call, remote_grid4, "contest_qso_log", &stmt);
+}
 
-    if (!stmt) {
-        int rc = sqlite3_prepare_v3(db,
-            "SELECT 1 FROM qso_log WHERE " WORKED_TUPLE_SQL
-                "AND canonized_remote_callsign = :rc COLLATE NOCASE "
-                /* Empty candidate grid or a logged record without a grid
-                 * falls back to a match by callsign alone (conservative). */
-                "AND (:rg = '' OR COALESCE(remote_grid,'') = '' "
-                    "OR substr(remote_grid,1,4) = :rg COLLATE NOCASE) "
+static bool worked_grid_table(const char *local_call, const char *local_grid4,
+                              qso_log_mode_t mode, qso_log_band_t band,
+                              const char *remote_grid4,
+                              const char *table, sqlite3_stmt **stmt_slot)
+{
+    if (!db || !local_call || !remote_grid4 || remote_grid4[0] == '\0') return false;
+
+    if (!*stmt_slot) {
+        char sql[320];
+        snprintf(sql, sizeof(sql),
+            "SELECT 1 FROM %s WHERE " WORKED_TUPLE_SQL
+                "AND substr(COALESCE(remote_grid,''),1,4) = :rg COLLATE NOCASE "
             "LIMIT 1",
-            -1, SQLITE_PREPARE_PERSISTENT, &stmt, 0);
+            table);
+        int rc = sqlite3_prepare_v3(db, sql, -1, SQLITE_PREPARE_PERSISTENT, stmt_slot, 0);
         if (rc != SQLITE_OK) {
-            LV_LOG_ERROR("Can't prepare worked_pair query");
-            stmt = NULL;
+            LV_LOG_ERROR("Can't prepare worked_grid query");
+            *stmt_slot = NULL;
             return false;
         }
     } else {
-        sqlite3_reset(stmt);
-        sqlite3_clear_bindings(stmt);
+        sqlite3_reset(*stmt_slot);
+        sqlite3_clear_bindings(*stmt_slot);
     }
 
-    bind_worked_tuple(stmt, local_call, local_grid4, mode, band);
+    bind_worked_tuple(*stmt_slot, local_call, local_grid4, mode, band);
+    sqlite3_bind_text(*stmt_slot, sqlite3_bind_parameter_index(*stmt_slot, ":rg"),
+                      remote_grid4, strlen(remote_grid4), 0);
 
-    char *canonized = util_canonize_callsign(remote_call, true);
-    const char *rc_val = canonized ? canonized : remote_call;
-    sqlite3_bind_text(stmt, sqlite3_bind_parameter_index(stmt, ":rc"),
-                      rc_val, strlen(rc_val), 0);
-    const char *rg = remote_grid4 ? remote_grid4 : "";
-    sqlite3_bind_text(stmt, sqlite3_bind_parameter_index(stmt, ":rg"),
-                      rg, strlen(rg), 0);
-
-    bool worked = (sqlite3_step(stmt) == SQLITE_ROW);
-    free(canonized);
-    return worked;
+    return sqlite3_step(*stmt_slot) == SQLITE_ROW;
 }
 
 bool qso_log_worked_grid(const char *local_call, const char *local_grid4,
@@ -337,30 +415,17 @@ bool qso_log_worked_grid(const char *local_call, const char *local_grid4,
                          const char *remote_grid4)
 {
     static sqlite3_stmt *stmt = NULL;
+    return worked_grid_table(local_call, local_grid4, mode, band,
+                             remote_grid4, "qso_log", &stmt);
+}
 
-    if (!db || !local_call || !remote_grid4 || remote_grid4[0] == '\0') return false;
-
-    if (!stmt) {
-        int rc = sqlite3_prepare_v3(db,
-            "SELECT 1 FROM qso_log WHERE " WORKED_TUPLE_SQL
-                "AND substr(COALESCE(remote_grid,''),1,4) = :rg COLLATE NOCASE "
-            "LIMIT 1",
-            -1, SQLITE_PREPARE_PERSISTENT, &stmt, 0);
-        if (rc != SQLITE_OK) {
-            LV_LOG_ERROR("Can't prepare worked_grid query");
-            stmt = NULL;
-            return false;
-        }
-    } else {
-        sqlite3_reset(stmt);
-        sqlite3_clear_bindings(stmt);
-    }
-
-    bind_worked_tuple(stmt, local_call, local_grid4, mode, band);
-    sqlite3_bind_text(stmt, sqlite3_bind_parameter_index(stmt, ":rg"),
-                      remote_grid4, strlen(remote_grid4), 0);
-
-    return sqlite3_step(stmt) == SQLITE_ROW;
+bool qso_log_worked_grid_contest(const char *local_call, const char *local_grid4,
+                                 qso_log_mode_t mode, qso_log_band_t band,
+                                 const char *remote_grid4)
+{
+    static sqlite3_stmt *stmt = NULL;
+    return worked_grid_table(local_call, local_grid4, mode, band,
+                             remote_grid4, "contest_qso_log", &stmt);
 }
 
 static void * import_adif_thread(void* args) {
@@ -396,12 +461,13 @@ static void * import_adif_thread(void* args) {
 
 
 
-static bool create_tables() {
-    char    *err = 0;
-    int     rc;
+static bool create_log_table(const char *table) {
+    char *err = 0;
+    char sql[768];
+    int  rc;
 
-    rc = sqlite3_exec(db,
-        "CREATE TABLE IF NOT EXISTS qso_log( "
+    snprintf(sql, sizeof(sql),
+        "CREATE TABLE IF NOT EXISTS %s( "
             "ts              TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
             "freq            REAL CHECK ( freq > 0 ), "
             "band            INT NOT NULL, "
@@ -418,41 +484,54 @@ static bool create_tables() {
             "op_name         TEXT, "
             "comment         TEXT "
         ")",
-        NULL, NULL, &err);
+        table);
+    rc = sqlite3_exec(db, sql, NULL, NULL, &err);
     if (rc != SQLITE_OK) {
         LV_LOG_ERROR(err);
         return false;
     }
 
-    rc = sqlite3_exec(db,
-        "CREATE INDEX IF NOT EXISTS qso_log_idx_canonized_remote_callsign ON qso_log(canonized_remote_callsign COLLATE NOCASE)",
-        NULL, NULL, &err);
-    if (rc != SQLITE_OK) {
-        LV_LOG_ERROR(err);
-        return false;
-    }
-    rc = sqlite3_exec(db,
-        "CREATE INDEX IF NOT EXISTS qso_log_idx_mode ON qso_log(mode)",
-        NULL, NULL, &err);
-    if (rc != SQLITE_OK) {
-        LV_LOG_ERROR(err);
-        return false;
-    }
-    rc = sqlite3_exec(db,
-        "CREATE INDEX IF NOT EXISTS qso_log_idx_ts ON qso_log(ts)",
-        NULL, NULL, &err);
+    snprintf(sql, sizeof(sql),
+        "CREATE INDEX IF NOT EXISTS %s_idx_canonized_remote_callsign "
+        "ON %s(canonized_remote_callsign COLLATE NOCASE)",
+        table, table);
+    rc = sqlite3_exec(db, sql, NULL, NULL, &err);
     if (rc != SQLITE_OK) {
         LV_LOG_ERROR(err);
         return false;
     }
 
-    rc = sqlite3_exec(db,
-        "CREATE UNIQUE INDEX IF NOT EXISTS qso_log_idx_ts_call ON qso_log(ts, remote_callsign)",
-        NULL, NULL, &err);
+    snprintf(sql, sizeof(sql),
+        "CREATE INDEX IF NOT EXISTS %s_idx_mode ON %s(mode)", table, table);
+    rc = sqlite3_exec(db, sql, NULL, NULL, &err);
     if (rc != SQLITE_OK) {
         LV_LOG_ERROR(err);
         return false;
     }
 
+    snprintf(sql, sizeof(sql),
+        "CREATE INDEX IF NOT EXISTS %s_idx_ts ON %s(ts)", table, table);
+    rc = sqlite3_exec(db, sql, NULL, NULL, &err);
+    if (rc != SQLITE_OK) {
+        LV_LOG_ERROR(err);
+        return false;
+    }
+
+    snprintf(sql, sizeof(sql),
+        "CREATE UNIQUE INDEX IF NOT EXISTS %s_idx_ts_call "
+        "ON %s(ts, remote_callsign)",
+        table, table);
+    rc = sqlite3_exec(db, sql, NULL, NULL, &err);
+    if (rc != SQLITE_OK) {
+        LV_LOG_ERROR(err);
+        return false;
+    }
+
+    return true;
+}
+
+static bool create_tables() {
+    if (!create_log_table("qso_log")) return false;
+    if (!create_log_table("contest_qso_log")) return false;
     return true;
 }

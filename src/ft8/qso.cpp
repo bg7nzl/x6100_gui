@@ -238,8 +238,18 @@ void peer_close_qso(PeerEntry *peer) {
     peer->qso_start    = 0;
 }
 
+bool is_na_vhf(const ftx_qso_context_t *ctx) {
+    return ctx && (ctx->proc == FTX_QSO_PROC_NA_VHF);
+}
+
+/* Strict dual-flag complete (Normal + flush fallback). */
 bool peer_qso_complete(const PeerEntry *peer) {
     return peer->has_rst_sent && peer->has_rst_rcvd;
+}
+
+/* NA VHF: exchange sent + a valid peer grid (may come from their CQ). */
+bool peer_qso_complete_na(const PeerEntry *peer) {
+    return peer->has_rst_sent && qth_grid_check(peer->grid);
 }
 
 void peer_fill_record(const PeerEntry *peer, time_t end_time, ftx_qso_record_t *rec) {
@@ -254,21 +264,27 @@ void peer_fill_record(const PeerEntry *peer, time_t end_time, ftx_qso_record_t *
 
 /* Try to log the QSO with `peer`; on success fills response->qso and
  * closes the peer's bookkeeping. */
-void peer_try_save(PeerEntry *peer, time_t end_time, ftx_qso_response_t *response) {
-    if (!peer_qso_complete(peer)) return;
+void peer_try_save(PeerEntry *peer, time_t end_time, ftx_qso_response_t *response,
+                   bool na_vhf) {
+    if (na_vhf) {
+        if (!peer_qso_complete_na(peer)) return;
+    } else {
+        if (!peer_qso_complete(peer)) return;
+    }
     peer_fill_record(peer, end_time, &response->qso);
     response->save = true;
     peer_close_qso(peer);
 }
 
 /* Every decoded message feeds the peers dict: grids from any message that
- * carries one, reports from messages addressed to us, and the received
- * final 73 (the peer may skip RR73) which can complete a QSO with no
- * reply scheduled. */
+ * carries one, exchange receipts from messages addressed to us, and the
+ * received final 73 / (NA VHF) RR73 which can complete a QSO. */
 void analyze_rx(const ftx_qso_context_t *ctx,
                 const ftx_decoded_msg_t *msgs,
                 size_t msg_count,
                 ftx_qso_response_t *response) {
+    const bool na = is_na_vhf(ctx);
+
     for (size_t i = 0; i < msg_count; i++) {
         if (!msgs[i].text) continue;
 
@@ -284,24 +300,47 @@ void analyze_rx(const ftx_qso_context_t *ctx,
         }
         if (!meta.to_me) continue;
 
-        if ((meta.type == FTX_MSG_TYPE_REPORT) || (meta.type == FTX_MSG_TYPE_R_REPORT)) {
+        /* Arm exch_rcvd: Normal on REPORT/R_REPORT/R_GRID; NA VHF also on
+         * GRID (and REPORT paths for mixed-protocol follow). */
+        bool arm_rcvd = false;
+        if (na) {
+            arm_rcvd = (meta.type == FTX_MSG_TYPE_GRID) ||
+                       (meta.type == FTX_MSG_TYPE_R_GRID) ||
+                       (meta.type == FTX_MSG_TYPE_REPORT) ||
+                       (meta.type == FTX_MSG_TYPE_R_REPORT);
+        } else {
+            arm_rcvd = (meta.type == FTX_MSG_TYPE_REPORT) ||
+                       (meta.type == FTX_MSG_TYPE_R_REPORT) ||
+                       (meta.type == FTX_MSG_TYPE_R_GRID);
+        }
+        if (arm_rcvd) {
             peer->has_rst_rcvd = true;
-            peer->rst_rcvd     = meta.remote_snr;
-        } else if (meta.type == FTX_MSG_TYPE_73) {
-            peer_try_save(peer, ctx->now, response);
+            if ((meta.type == FTX_MSG_TYPE_REPORT) ||
+                (meta.type == FTX_MSG_TYPE_R_REPORT)) {
+                peer->rst_rcvd = meta.remote_snr;
+            }
+        }
+
+        if (meta.type == FTX_MSG_TYPE_73) {
+            peer_try_save(peer, ctx->now, response, na);
+        } else if (na && (meta.type == FTX_MSG_TYPE_RR73)) {
+            /* Peer skipped R-grid and closed with RR73: save on receipt. */
+            peer_try_save(peer, ctx->now, response, true);
         }
     }
 }
 
 /* Bookkeeping attached to every transmitted reply.
  * - Replying to a CQ (tx1) or grid (tx2) starts a fresh QSO;
- * - order 3/4 arms rst_sent with the exact value we put on the air;
- * - our RR73 / 73 completes the QSO when both reports were exchanged.
+ * - Normal: order 3/4 arms rst_sent; NA VHF: order 2/3 (our grid is already
+ *   in the order-2 reply text);
+ * - our RR73 / 73 completes the QSO when the exchange criteria are met.
  * Sticky retransmits never restart the QSO clock. */
 void emit_candidate(const ftx_qso_context_t *ctx,
                     const Candidate *cand,
                     bool sticky,
                     ftx_qso_response_t *response) {
+    const bool na = is_na_vhf(ctx);
     PeerEntry *peer = peer_get(cand->call);
 
     /* The click entry point bypasses analyze_rx: keep the grid fresh here too. */
@@ -315,12 +354,15 @@ void emit_candidate(const ftx_qso_context_t *ctx,
         peer->qso_start = ctx->now;
     }
 
-    if ((cand->order == 3) || (cand->order == 4)) {
+    bool arm_sent = na
+        ? ((cand->order == 2) || (cand->order == 3))
+        : ((cand->order == 3) || (cand->order == 4));
+    if (arm_sent) {
         peer->has_rst_sent = true;
         peer->rst_sent     = clamp_snr(cand->snr);
     }
     if ((cand->order == 5) || (cand->order == 6)) {
-        peer_try_save(peer, ctx->now, response);
+        peer_try_save(peer, ctx->now, response, na);
     }
 
     fill_tx(response, cand->text, cand->freq_hz);
@@ -366,8 +408,13 @@ bool compute_one(const ftx_qso_context_t *ctx,
         switch (meta.type) {
             case FTX_MSG_TYPE_GRID:
                 cand->order = 3;
-                std::snprintf(cand->text, sizeof(cand->text), "%s %s %+03d",
-                              meta.call_de, me, clamp_snr(snr));
+                if (is_na_vhf(ctx)) {
+                    std::snprintf(cand->text, sizeof(cand->text), "%s %s R %s",
+                                  meta.call_de, me, local_qth4(ctx).c_str());
+                } else {
+                    std::snprintf(cand->text, sizeof(cand->text), "%s %s %+03d",
+                                  meta.call_de, me, clamp_snr(snr));
+                }
                 return true;
             case FTX_MSG_TYPE_REPORT:
                 cand->order = 4;
@@ -375,6 +422,8 @@ bool compute_one(const ftx_qso_context_t *ctx,
                               meta.call_de, me, clamp_snr(snr));
                 return true;
             case FTX_MSG_TYPE_R_REPORT:
+            case FTX_MSG_TYPE_R_GRID:
+                /* R±nn and R-grid both close with RR73 (protocol follow). */
                 cand->order = 5;
                 std::snprintf(cand->text, sizeof(cand->text), "%s %s RR73",
                               meta.call_de, me);
@@ -389,8 +438,10 @@ bool compute_one(const ftx_qso_context_t *ctx,
         }
     }
 
-    /* Someone else's QSO just ended: tail-end the freed station. */
+    /* Someone else's QSO just ended: tail-end the freed station.
+     * NA VHF never preempts (Pre degrades to Full). */
     if ((meta.type == FTX_MSG_TYPE_RR73) || (meta.type == FTX_MSG_TYPE_73)) {
+        if (is_na_vhf(ctx)) return false;
         cand->order = 0;
         std::snprintf(cand->text, sizeof(cand->text), "%s %s %s",
                       meta.call_de, me, local_qth4(ctx).c_str());
@@ -720,6 +771,10 @@ void ftx_qso_parse_rx_text(const ftx_qso_context_t *ctx,
                parse_snr(payload, &snr_val)) {
         meta->type = FTX_MSG_TYPE_REPORT;
         meta->remote_snr = snr_val;
+    } else if (ieq_str(payload, "R") && (tokens.size() >= 4) &&
+               qth_grid_check(tokens[3].c_str())) {
+        meta->type = FTX_MSG_TYPE_R_GRID;
+        copy_str(meta->grid, sizeof(meta->grid), tokens[3].c_str());
     } else if (qth_grid_check(payload.c_str())) {
         meta->type = FTX_MSG_TYPE_GRID;
         copy_str(meta->grid, sizeof(meta->grid), payload.c_str());

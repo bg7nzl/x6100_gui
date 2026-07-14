@@ -71,7 +71,7 @@ void adif_log_close(adif_log l) {
     fclose(l->fd);
 }
 
-void adif_add_qso(adif_log l, qso_log_record_t qso)
+void adif_add_qso(adif_log l, qso_log_record_t qso, const char *comment)
 {
     write_str(l->fd, "STATION_CALLSIGN", qso.local_call);
     write_str(l->fd, "OPERATOR", qso.local_call);
@@ -87,6 +87,9 @@ void adif_add_qso(adif_log l, qso_log_record_t qso)
     write_freq(l->fd, qso.freq_mhz);
     write_str(l->fd, "GRIDSQUARE", qso.remote_grid);
     write_str(l->fd, "MY_GRIDSQUARE", qso.local_grid);
+    if (comment && comment[0] != '\0') {
+        write_str(l->fd, "COMMENT", comment);
+    }
     fprintf(l->fd, "<EOR>\r\n");
     fflush(l->fd);
 }

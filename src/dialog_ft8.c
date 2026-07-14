@@ -97,6 +97,10 @@ static Subject    *cq_enabled;
  * only the Auto Mode tie-break (cfg.ft8_auto_mode) persists. */
 static Subject    *auto_level;
 
+/* QSO processor profile (ftx_qso_proc_t). Session-local, always back to
+ * Normal on dialog construct — contest mode must not stick after the event. */
+static Subject    *qso_proc;
+
 static bool        tx_time_slot;
 
 static ftx_tx_msg_t tx_msg;
@@ -172,6 +176,7 @@ static const char * tx_call_label_getter();
 static const char * hold_freq_label_getter();
 static const char * auto_label_getter();
 static const char * auto_mode_label_getter();
+static const char * processor_label_getter();
 
 static void show_cq_all_cb(struct button_data_t *btn_data);
 static void mode_ft4_ft8_cb(struct button_data_t *btn_data);
@@ -182,6 +187,7 @@ static void tx_call_en_dis_cb(struct button_data_t *btn_data);
 static void hold_tx_freq_cb(struct button_data_t *btn_data);
 static void mode_auto_cb(struct button_data_t *btn_data);
 static void mode_auto_sel_cb(struct button_data_t *btn_data);
+static void mode_processor_cb(struct button_data_t *btn_data);
 static void cq_modifier_cb(struct button_data_t *btn_data);
 static void time_sync(struct button_data_t *btn_data);
 
@@ -229,6 +235,7 @@ static button_data_t button_cq_mod = { .type=BTN_TEXT, .label = "CQ\nModifier", 
 static button_data_t button_time_sync = { .type=BTN_TEXT, .label = "Time\nSync", .press = time_sync };
 
 static button_data_t button_page_4 = { .type=BTN_TEXT, .label = "(Page: 4:4)", .press = button_next_page_cb, .next=&btn_page_1};
+static button_data_t button_processor = { .type=BTN_TEXT_FN, .label_fn = processor_label_getter, .press = mode_processor_cb };
 
 static buttons_page_t btn_page_1 = {
     {&button_page_1, &button_show_cq_all, &button_mode_ft4_ft8, &button_tx_cq_en_dis, &button_tx_call_en_dis}
@@ -243,7 +250,7 @@ static buttons_page_t btn_page_3 = {
 };
 
 static buttons_page_t btn_page_4 = {
-    {&button_page_4}
+    {&button_page_4, &button_processor}
 };
 
 static dialog_t dialog = {
@@ -546,6 +553,12 @@ static void construct_cb(lv_obj_t *parent) {
     } else {
         subject_set_int(auto_level, FTX_QSO_AUTO_OFF);
     }
+    if (!qso_proc) {
+        qso_proc = subject_create_int(FTX_QSO_PROC_NORMAL);
+        button_processor.subj = &qso_proc;
+    } else {
+        subject_set_int(qso_proc, FTX_QSO_PROC_NORMAL);
+    }
     if (!tx_enabled) {
         tx_enabled = subject_create_int(true);
         button_tx_call_en_dis.subj = &tx_enabled;
@@ -713,6 +726,17 @@ const char *auto_mode_label_getter() {
     return buf;
 }
 
+const char *processor_label_getter() {
+    static char buf[32];
+    int proc = subject_get_int(qso_proc);
+    if ((proc < FTX_QSO_PROC_NORMAL) || (proc > FTX_QSO_PROC_NA_VHF)) {
+        proc = FTX_QSO_PROC_NORMAL;
+    }
+    sprintf(buf, "Processor:\n%s",
+            (proc == FTX_QSO_PROC_NA_VHF) ? "NA VHF" : "Normal");
+    return buf;
+}
+
 static void show_cq_all_cb(struct button_data_t *btn_data) {
     if (disable_buttons) return;
     subject_set_int(cfg.ft8_show_all.val, !subject_get_int(cfg.ft8_show_all.val));
@@ -775,6 +799,18 @@ static void mode_auto_sel_cb(struct button_data_t *btn_data) {
     qso_setting_changed();
 }
 
+static void mode_processor_cb(struct button_data_t *btn_data) {
+    if (disable_buttons) return;
+    int proc = subject_get_int(qso_proc);
+    if (proc == FTX_QSO_PROC_NORMAL) {
+        proc = FTX_QSO_PROC_NA_VHF;
+    } else {
+        proc = FTX_QSO_PROC_NORMAL;
+    }
+    subject_set_int(qso_proc, proc);
+    qso_setting_changed();
+}
+
 static void hold_tx_freq_cb(struct button_data_t *btn_data) {
     if (disable_buttons) return;
     subject_set_int(cfg.ft8_hold_freq.val, !subject_get_int(cfg.ft8_hold_freq.val));
@@ -785,7 +821,11 @@ static void hold_tx_freq_cb(struct button_data_t *btn_data) {
  * engine reply that displaced the CQ freed the TX slot again — a served
  * responder just proved propagation, so the countdown restarts. */
 static void cq_rearm(void) {
-    cq_make_message(params.callsign.x, params.qth.x, params.ft8_cq_modifier.x, tx_msg.msg);
+    const char *mod = params.ft8_cq_modifier.x;
+    if (subject_get_int(qso_proc) == FTX_QSO_PROC_NA_VHF) {
+        mod = "TEST";
+    }
+    cq_make_message(params.callsign.x, params.qth.x, mod, tx_msg.msg);
     tx_msg.repeats = subject_get_int(cfg.ft8_max_repeats.val);
     tx_msg_oneshot = false;
     tx_time_slot = (subject_get_int(cq_enabled) == CQ_ODD);
@@ -1068,11 +1108,16 @@ static ftx_qso_context_t qso_context(void) {
     if ((sel < FTX_QSO_SEL_SNR) || (sel > FTX_QSO_SEL_NEW_GRID)) {
         sel = FTX_QSO_SEL_SNR;
     }
+    int proc = subject_get_int(qso_proc);
+    if ((proc < FTX_QSO_PROC_NORMAL) || (proc > FTX_QSO_PROC_NA_VHF)) {
+        proc = FTX_QSO_PROC_NORMAL;
+    }
     ftx_qso_context_t ctx = {
         .local_callsign = params.callsign.x,
         .local_qth      = params.qth.x,
         .auto_level     = (ftx_qso_auto_t)level,
         .sel            = (ftx_qso_sel_t)sel,
+        .proc           = (ftx_qso_proc_t)proc,
         .now            = time(NULL),
     };
     return ctx;
@@ -1092,8 +1137,13 @@ static void save_qso_record_db(const ftx_qso_record_t *rec) {
     );
     free(canonized_call);
 
-    adif_add_qso(ft8_log, qso);
-    qso_log_record_save(qso);
+    bool contest = (subject_get_int(qso_proc) == FTX_QSO_PROC_NA_VHF);
+    adif_add_qso(ft8_log, qso, contest ? "NA VHF contest" : NULL);
+    if (contest) {
+        qso_log_record_save_contest(qso);
+    } else {
+        qso_log_record_save(qso);
+    }
 }
 
 /* db save + UI feedback (popup goes through the async helpers, so this
@@ -1149,11 +1199,21 @@ static void worked_flags(const ftx_msg_meta_t *meta,
     char remote_grid4[5] = "";
     strncpy(remote_grid4, meta->grid, sizeof(remote_grid4) - 1);
 
-    *worked = qso_log_worked_pair(params.callsign.x, local_grid4, mode, band,
-                                  meta->call_de, remote_grid4);
-    if (remote_grid4[0] != '\0') {
-        *grid_worked = qso_log_worked_grid(params.callsign.x, local_grid4,
-                                           mode, band, remote_grid4);
+    bool contest = (subject_get_int(qso_proc) == FTX_QSO_PROC_NA_VHF);
+    if (contest) {
+        *worked = qso_log_worked_pair_contest(params.callsign.x, local_grid4, mode, band,
+                                              meta->call_de, remote_grid4);
+        if (remote_grid4[0] != '\0') {
+            *grid_worked = qso_log_worked_grid_contest(params.callsign.x, local_grid4,
+                                                       mode, band, remote_grid4);
+        }
+    } else {
+        *worked = qso_log_worked_pair(params.callsign.x, local_grid4, mode, band,
+                                      meta->call_de, remote_grid4);
+        if (remote_grid4[0] != '\0') {
+            *grid_worked = qso_log_worked_grid(params.callsign.x, local_grid4,
+                                               mode, band, remote_grid4);
+        }
     }
 }
 
@@ -1232,11 +1292,14 @@ static void add_rx_text(int16_t snr, const char * text, slot_info_t *s_info, flo
 
     cell_data_t  cell_data;
     if (meta->type == FTX_MSG_TYPE_CQ) {
-        cell_data.worked_type = qso_log_search_worked(
-            meta->call_de,
-            subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8 ? MODE_FT8 : MODE_FT4,
-            qso_log_freq_to_band(subject_get_int(cfg_cur.fg_freq))
-        );
+        qso_log_mode_t mode = subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8
+            ? MODE_FT8 : MODE_FT4;
+        qso_log_band_t band = qso_log_freq_to_band(subject_get_int(cfg_cur.fg_freq));
+        if (subject_get_int(qso_proc) == FTX_QSO_PROC_NA_VHF) {
+            cell_data.worked_type = qso_log_search_worked_contest(meta->call_de, mode, band);
+        } else {
+            cell_data.worked_type = qso_log_search_worked(meta->call_de, mode, band);
+        }
     }
 
     cell_data.cell_type = cell_type;
