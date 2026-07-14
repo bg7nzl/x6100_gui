@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <strings.h>
 #include <stdbool.h>
 #include <unistd.h>
 #include <regex.h>
@@ -45,6 +46,9 @@ static char * extract_str(const char * src, size_t src_len);
 
 static qso_log_band_t str_to_band(const char * s);
 static qso_log_mode_t create_mode(const char * mode, const char * submode);
+
+static bool field_is(const char *field, size_t field_len, const char *name);
+static bool line_has_eor(const char *line, ssize_t read);
 
 
 adif_log adif_log_init(const char * path) {
@@ -125,10 +129,29 @@ int adif_read(const char * path, qso_log_record_t ** records) {
     struct tm qso_ts;
     size_t val_len;
 
+    char *rec = NULL;
+    size_t rec_len = 0;
+    size_t rec_cap = 0;
+
     while ((read = getline(&line, &len, fp)) != -1) {
-        if (strcmp(line + read - 7, "<EOR>\r\n") != 0) continue;
-        s = line;
+        size_t append_len = (size_t) read;
+        while (append_len > 0 && (line[append_len - 1] == '\n' || line[append_len - 1] == '\r')) {
+            append_len--;
+        }
+        if (rec_len + append_len + 1 > rec_cap) {
+            rec_cap = (rec_len + append_len + 1) * 2;
+            rec = realloc(rec, rec_cap);
+        }
+        memcpy(rec + rec_len, line, append_len);
+        rec_len += append_len;
+        rec[rec_len] = '\0';
+
+        if (!line_has_eor(line, read)) continue;
+
+        s = rec;
         cur_record = &(*records)[cur_record_id];
+        memset(cur_record, 0, sizeof(*cur_record));
+        memset(&qso_ts, 0, sizeof(qso_ts));
         char * mode = NULL;
         char * submode = NULL;
         for (unsigned int i = 0; ; i++) {
@@ -136,34 +159,46 @@ int adif_read(const char * path, qso_log_record_t ** records) {
                 break;
             val_len = atoi(s + pmatch[2].rm_so);
             if (val_len > 0) {
-                if (strncmp(s + pmatch[1].rm_so, "OPERATOR", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    COPY_STR(cur_record->local_call, s + pmatch[0].rm_eo, val_len);
-                } else if (strncmp(s + pmatch[1].rm_so, "CALL", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    COPY_STR(cur_record->remote_call, s + pmatch[0].rm_eo, val_len);
-                } else if (strncmp(s + pmatch[1].rm_so, "QSO_DATE", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    strptime(s + pmatch[0].rm_eo, "%Y%m%d", &qso_ts);
-                } else if (strncmp(s + pmatch[1].rm_so, "TIME_ON", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    strptime(s + pmatch[0].rm_eo, "%H%M", &qso_ts);
-                } else if (strncmp(s + pmatch[1].rm_so, "MODE", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    mode = extract_str(s + pmatch[0].rm_eo, val_len);
-                } else if (strncmp(s + pmatch[1].rm_so, "SUBMODE", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    submode = extract_str(s + pmatch[0].rm_eo, val_len);
-                } else if (strncmp(s + pmatch[1].rm_so, "NAME", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    COPY_STR(cur_record->name, s + pmatch[0].rm_eo, val_len);
-                } else if (strncmp(s + pmatch[1].rm_so, "QTH", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    COPY_STR(cur_record->qth, s + pmatch[0].rm_eo, val_len);
-                } else if (strncmp(s + pmatch[1].rm_so, "RST_SENT", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    cur_record->rsts = atoi(s + pmatch[0].rm_eo);
-                } else if (strncmp(s + pmatch[1].rm_so, "RST_RCVD", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    cur_record->rstr = atoi(s + pmatch[0].rm_eo);
-                } else if (strncmp(s + pmatch[1].rm_so, "BAND", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    cur_record->band = str_to_band(s + pmatch[0].rm_eo);
-                } else if (strncmp(s + pmatch[1].rm_so, "FREQ", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    cur_record->freq_mhz = strtof(s + pmatch[0].rm_eo, NULL);
-                } else if (strncmp(s + pmatch[1].rm_so, "MY_GRIDSQUARE", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    COPY_STR(cur_record->local_grid, s + pmatch[0].rm_eo, val_len);
-                } else if (strncmp(s + pmatch[1].rm_so, "GRIDSQUARE", pmatch[1].rm_eo - pmatch[1].rm_so) == 0) {
-                    COPY_STR(cur_record->remote_grid, s + pmatch[0].rm_eo, val_len);
+                const char *field = s + pmatch[1].rm_so;
+                size_t field_len = pmatch[1].rm_eo - pmatch[1].rm_so;
+                const char *val = s + pmatch[0].rm_eo;
+
+                if (field_is(field, field_len, "STATION_CALLSIGN")) {
+                    if (cur_record->local_call[0] == '\0') {
+                        COPY_STR(cur_record->local_call, (char *) val, val_len);
+                    }
+                } else if (field_is(field, field_len, "OPERATOR")) {
+                    COPY_STR(cur_record->local_call, (char *) val, val_len);
+                } else if (field_is(field, field_len, "CALL")) {
+                    COPY_STR(cur_record->remote_call, (char *) val, val_len);
+                } else if (field_is(field, field_len, "QSO_DATE")) {
+                    strptime(val, "%Y%m%d", &qso_ts);
+                } else if (field_is(field, field_len, "TIME_ON")) {
+                    if (val_len >= 6) {
+                        strptime(val, "%H%M%S", &qso_ts);
+                    } else {
+                        strptime(val, "%H%M", &qso_ts);
+                    }
+                } else if (field_is(field, field_len, "MODE")) {
+                    mode = extract_str(val, val_len);
+                } else if (field_is(field, field_len, "SUBMODE")) {
+                    submode = extract_str(val, val_len);
+                } else if (field_is(field, field_len, "NAME")) {
+                    COPY_STR(cur_record->name, (char *) val, val_len);
+                } else if (field_is(field, field_len, "QTH")) {
+                    COPY_STR(cur_record->qth, (char *) val, val_len);
+                } else if (field_is(field, field_len, "RST_SENT")) {
+                    cur_record->rsts = atoi(val);
+                } else if (field_is(field, field_len, "RST_RCVD")) {
+                    cur_record->rstr = atoi(val);
+                } else if (field_is(field, field_len, "BAND")) {
+                    cur_record->band = str_to_band(val);
+                } else if (field_is(field, field_len, "FREQ")) {
+                    cur_record->freq_mhz = strtof(val, NULL);
+                } else if (field_is(field, field_len, "MY_GRIDSQUARE")) {
+                    COPY_STR(cur_record->local_grid, (char *) val, val_len);
+                } else if (field_is(field, field_len, "GRIDSQUARE")) {
+                    COPY_STR(cur_record->remote_grid, (char *) val, val_len);
                 }
             }
 
@@ -183,7 +218,9 @@ int adif_read(const char * path, qso_log_record_t ** records) {
             arr_size *= 2;
             (*records) = realloc((*records), arr_size * sizeof(qso_log_record_t));
         }
+        rec_len = 0;
     }
+    free(rec);
     return cur_record_id--;
 }
 
@@ -289,13 +326,32 @@ static qso_log_band_t str_to_band(const char * s) {
 
 static qso_log_mode_t create_mode(const char * mode, const char * submode) {
     if (!mode) return MODE_OTHER;
-    if (strcmp(mode, "SSB") == 0) return MODE_SSB;
-    if (strcmp(mode, "AM") == 0) return MODE_AM;
-    if (strcmp(mode, "FM") == 0) return MODE_FM;
-    if (strcmp(mode, "CW") == 0) return MODE_CW;
-    if (strcmp(mode, "FT8") == 0) return MODE_FT8;
-    if (strcmp(mode, "RTTY") == 0) return MODE_RTTY;
+    if (strcasecmp(mode, "SSB") == 0) return MODE_SSB;
+    if (strcasecmp(mode, "AM") == 0) return MODE_AM;
+    if (strcasecmp(mode, "FM") == 0) return MODE_FM;
+    if (strcasecmp(mode, "CW") == 0) return MODE_CW;
+    if (strcasecmp(mode, "FT8") == 0) return MODE_FT8;
+    if (strcasecmp(mode, "RTTY") == 0) return MODE_RTTY;
     if (!submode) return MODE_OTHER;
-    if ((strcmp(mode, "MFSK") == 0) && (strcmp(submode, "FT4") == 0)) return MODE_FT4;
+    if ((strcasecmp(mode, "MFSK") == 0) && (strcasecmp(submode, "FT4") == 0)) return MODE_FT4;
     return MODE_OTHER;
+}
+
+static bool field_is(const char *field, size_t field_len, const char *name)
+{
+    size_t name_len = strlen(name);
+    return field_len == name_len && strncasecmp(field, name, field_len) == 0;
+}
+
+static bool line_has_eor(const char *line, ssize_t read)
+{
+    ssize_t end = read;
+
+    if (end < 5) return false;
+
+    while (end > 0 && (line[end - 1] == '\n' || line[end - 1] == '\r')) {
+        end--;
+    }
+
+    return end >= 5 && strncasecmp(line + end - 5, "<EOR>", 5) == 0;
 }
