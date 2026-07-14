@@ -26,7 +26,7 @@
 
 /* FT8 audio tone offset inside the radio passband. */
 #define SIGNAL_FREQ_HZ   1325
-#define MAX_PWR_W        5.0f
+#define MAX_PWR_W        10.0f
 #define GAIN_MIN_DB     (-30.0f)
 #define GAIN_MAX_DB      0.0f
 
