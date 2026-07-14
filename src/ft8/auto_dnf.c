@@ -7,9 +7,7 @@
  */
 
 #include "auto_dnf.h"
-/* #include "ft8_log.h" -- disabled: DNF is independent of LOG (§7.6).
- * ft8_log_dnf() call is commented out below; uncomment when both
- * PR-LOG and PR-DNF are merged into bg7nzl. */
+#include "ft8_log.h"
 
 #include <math.h>
 #include <pthread.h>
@@ -146,6 +144,7 @@ typedef struct {
     uint16_t half_width_hz;
     float    delta_db;
     uint64_t slot_start;
+    struct timespec slot_start_ts;
     bool     apply_dnf;
 } apply_msg_t;
 
@@ -265,8 +264,7 @@ static void apply_cb(void *arg) {
     subject_set_int(cfg.dnf_width.val,  m->half_width_hz);
 
     /* Log only actual applies. */
-    /* (void)slot_start_wall; */
-    /* ft8_log_dnf(slot_start_wall, m->center_hz, m->delta_db); -- disabled §7.6 */
+    ft8_log_dnf(m->slot_start_ts, m->center_hz, m->delta_db);
 
     overlay_show(ctx, m->center_hz, m->half_width_hz, m->delta_db, true);
     clear_timer_arm(ctx);
@@ -334,7 +332,8 @@ static float local_weighted(const float *maxpool, uint32_t i,
 static void run_peak_detection(auto_dnf_ctx_t *ctx,
                                uint32_t low_bin, uint32_t high_bin,
                                uint16_t nfft, int32_t sample_rate,
-                               uint64_t slot_start) {
+                               uint64_t slot_start,
+                               struct timespec slot_start_ts) {
     /* Build percentile sample from maxpool; skip sentinel/bogus values. */
     int cnt = 0;
     for (uint32_t i = low_bin + 2; (i + 2) < high_bin && cnt < FLOOR_SAMPLES_MAX; i++) {
@@ -383,6 +382,7 @@ static void run_peak_detection(auto_dnf_ctx_t *ctx,
         .half_width_hz = (uint16_t)HALF_WIDTH_HZ,
         .delta_db      = delta_db,
         .slot_start    = slot_start,
+        .slot_start_ts = slot_start_ts,
         .apply_dnf     = apply_dnf,
     };
     scheduler_put(apply_cb, &m, sizeof(m));
@@ -429,6 +429,11 @@ void auto_dnf_on_psd(auto_dnf_ctx_t *ctx,
     uint64_t slot_ns = (proto == FTX_PROTOCOL_FT4) ? 7500000000ULL : 15000000000ULL;
     uint64_t epoch_ns = (uint64_t)frame_ts.tv_sec * 1000000000ULL + (uint64_t)frame_ts.tv_nsec;
     uint64_t slot_start = epoch_ns / slot_ns;
+    uint64_t slot_start_ns = slot_start * slot_ns;
+    struct timespec slot_start_ts = {
+        .tv_sec  = (time_t)(slot_start_ns / 1000000000ULL),
+        .tv_nsec = (long)(slot_start_ns % 1000000000ULL),
+    };
     float sec_since_slot_start = (float)(epoch_ns - slot_start * slot_ns) / 1.0e9f;
 
     if (slot_start != ctx->slot_seen) {
@@ -451,7 +456,8 @@ void auto_dnf_on_psd(auto_dnf_ctx_t *ctx,
     }
 
     if (sec_since_slot_start >= ctx->tuning.scan_end_sec) {
-        run_peak_detection(ctx, low_bin, high_bin, nfft, sample_rate, slot_start);
+        run_peak_detection(ctx, low_bin, high_bin, nfft, sample_rate,
+                           slot_start, slot_start_ts);
     }
 }
 

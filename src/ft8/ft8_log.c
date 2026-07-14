@@ -48,6 +48,17 @@ static const char *slot_ts_str(time_t slot_start, char *buf, size_t bufsz) {
     return buf;
 }
 
+static const char *slot_ts_str_precise(struct timespec slot_start, char *buf, size_t bufsz) {
+    if (slot_start.tv_sec == 0 || bufsz < 24) return NULL;
+    struct tm tm;
+    localtime_r(&slot_start.tv_sec, &tm);
+    snprintf(buf, bufsz, "%04d-%02d-%02d_%02d-%02d-%02d.%03ld",
+             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+             tm.tm_hour, tm.tm_min, tm.tm_sec,
+             slot_start.tv_nsec / 1000000L);
+    return buf;
+}
+
 static void ensure_file_open(void) {
     if (s_file) return;
 
@@ -190,6 +201,19 @@ static void ft8_log_tx(time_t slot_start, uint64_t base_freq,
 
     fprintf(s_file, "TX,%s,%llu,%s\n",
             ts, (unsigned long long)rf_hz, tx_text);
+    fflush(s_file);
+}
+
+void ft8_log_dnf(struct timespec slot_start, uint16_t center_hz, float delta_db) {
+    ensure_file_open();
+    if (!s_file) return;
+
+    char ts_buf[32];
+    const char *ts = slot_ts_str_precise(slot_start, ts_buf, sizeof(ts_buf));
+    if (!ts) return;
+
+    fprintf(s_file, "DNF,%s,%u,%.1f\n",
+            ts, (unsigned int)center_hz, (double)delta_db);
     fflush(s_file);
 }
 
