@@ -30,6 +30,7 @@
 #include "dialog_swrscan.h"
 #include "cw.h"
 #include "pubsub_ids.h"
+#include "tx_log.h"
 
 /*********************
  *      DEFINES
@@ -120,6 +121,10 @@ static uint64_t         now_time;
 static uint64_t         prev_time;
 static uint64_t         idle_time;
 static bool             mute = false;
+
+static bool             last_pack_tx = false;
+static uint64_t         tx_active_since = 0;
+static uint64_t         tx_active_last_watchdog_log = 0;
 
 static cfloat           samples_buf[RADIO_SAMPLES*2];
 
@@ -683,6 +688,13 @@ static void base_control_command(Subject *subj, void *user_data) {
     WITH_RADIO_LOCK(x6100_control_cmd(cmd, val));
 }
 
+static void tx_log_radio_event(const char *event, const char *detail, float pwr_override) {
+    uint32_t freq_hz = subject_get_int(cfg_cur.fg_freq);
+    uint32_t mode = subject_get_int(cfg_cur.mode);
+    float pwr = pwr_override > 0.0f ? pwr_override : subject_get_float(cfg.pwr.val);
+    tx_log_event(event, freq_hz, mode, pwr, detail);
+}
+
 /**
  * Restore "listening" of main board and USB soundcard after ATU
  */
@@ -692,9 +704,11 @@ static void recover_processing_audio_inputs() {
     radio_lock();
     x6100_control_vfo_mode_set(vfo, x6100_mode_usb_dig);
     x6100_control_txpwr_set(0.1f);
+    tx_log_radio_event("TX_ATTEMPT_MODEM_ON", "atu_recover", 0.1f);
     x6100_control_modem_set(true);
     usleep(50000);
     x6100_control_modem_set(false);
+    tx_log_radio_event("TX_ATTEMPT_MODEM_OFF", "atu_recover", 0.1f);
     x6100_control_txpwr_set(subject_get_float(cfg.pwr.val));
     x6100_control_vfo_mode_set(vfo, subject_get_int(cfg_cur.mode));
     radio_unlock();
@@ -761,6 +775,18 @@ static bool radio_tick() {
         // printf("audio mul: %.*g\n", fuint.f);
         dsp_samples(samples, n_samples, pack->flag.tx, base_freq, flow_info.vary_freq, fft_dec);
 
+        if (pack->flag.tx != last_pack_tx) {
+            last_pack_tx = pack->flag.tx;
+            tx_log_radio_event(pack->flag.tx ? "TX_ACTIVE_ON" : "TX_ACTIVE_OFF", "flow", pack->tx_power * 0.1f);
+            if (pack->flag.tx) {
+                tx_active_since = now_time;
+                tx_active_last_watchdog_log = now_time;
+            } else {
+                tx_active_since = 0;
+                tx_active_last_watchdog_log = 0;
+            }
+        }
+
         switch (state) {
             case RADIO_RX:
                 if (pack->flag.tx) {
@@ -826,6 +852,15 @@ static bool radio_tick() {
 
             case RADIO_OFF:
                 break;
+        }
+
+        if (pack->flag.tx && tx_active_since) {
+            const uint64_t tx_active_ms = now_time - tx_active_since;
+            const uint64_t since_last_ms = now_time - tx_active_last_watchdog_log;
+            if (tx_active_ms > 20000 && since_last_ms > 10000) {
+                tx_active_last_watchdog_log = now_time;
+                tx_log_radio_event("TX_ACTIVE_STILL_ON", "flow_watchdog", pack->tx_power * 0.1f);
+            }
         }
 
         hkey_put(pack->hkey);
