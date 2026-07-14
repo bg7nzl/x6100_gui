@@ -33,6 +33,7 @@
 #include <ft8lib/message.h>
 
 #include "ft8/audio_worker.h"
+#include "ft8/auto_dnf.h"
 #include "ft8/cq_scheduler.h"
 #include "ft8/table_view.h"
 #include "ft8/tx_worker.h"
@@ -150,6 +151,7 @@ static float base_gain_offset;
 #define PSD_STAGING_MAX     1024
 static float             psd_staging[PSD_STAGING_MAX];
 static size_t            psd_staging_len    = 0;
+static struct timespec   psd_staging_ts     = {0, 0};
 static bool              psd_flush_pending  = false;
 static pthread_mutex_t   psd_mutex          = PTHREAD_MUTEX_INITIALIZER;
 
@@ -169,7 +171,9 @@ static void rotary_cb(int32_t diff);
  * Subject writes (subject_set_int) are thread-safe and run synchronously. */
 static void on_message_cb(const char *text, int snr, float freq_hz, float time_sec,
                           const slot_info_t *info, void *ctx);
-static void on_psd_cb(const float *psd, uint16_t nfft, float sec_since_slot_start,
+static void on_psd_cb(const float *psd, uint16_t nfft,
+                      struct timespec frame_ts,
+                      float sec_since_slot_start,
                       const slot_info_t *info, void *ctx);
 static void on_slot_end_cb(const slot_info_t *info, void *ctx);
 static void on_tick_cb(const slot_info_t *info, bool new_slot,
@@ -208,6 +212,9 @@ static size_t flush_unfinished_qsos(void);
 static ftx_qso_context_t qso_context(void);
 static void apply_qso_response(const ftx_qso_response_t *response, bool async_ui);
 
+const char *auto_dnf_label_getter(void);
+static void auto_dnf_cb(struct button_data_t *btn_data);
+
 static void on_table_press(const cell_data_t *cell_data);
 static void on_table_close(void);
 static void on_table_vol_change(int32_t delta);
@@ -245,6 +252,7 @@ static button_data_t button_page_3 = { .type=BTN_TEXT, .label = "(Page: 3:4)", .
 static button_data_t button_cq_mod = { .type=BTN_TEXT, .label = "CQ\nModifier", .press = cq_modifier_cb };
 static button_data_t button_time_sync = { .type=BTN_TEXT, .label = "Time\nSync", .press = time_sync };
 static button_data_t button_free_msg = { .type=BTN_TEXT, .label = "Free\nMSG", .press = free_msg_cb };
+static button_data_t button_auto_dnf = { .type=BTN_TEXT_FN, .label_fn = auto_dnf_label_getter, .press = auto_dnf_cb, .subj=&cfg.ft8_auto_dnf.val };
 
 static button_data_t button_page_4 = { .type=BTN_TEXT, .label = "(Page: 4:4)", .press = button_next_page_cb, .next=&btn_page_1};
 static button_data_t button_processor = { .type=BTN_TEXT_FN, .label_fn = processor_label_getter, .press = mode_processor_cb };
@@ -258,7 +266,7 @@ static buttons_page_t btn_page_2 = {
 };
 
 static buttons_page_t btn_page_3 = {
-    {&button_page_3, &button_cq_mod, &button_time_sync, &button_free_msg}
+    {&button_page_3, &button_cq_mod, &button_time_sync, &button_free_msg, &button_auto_dnf}
 };
 
 static buttons_page_t btn_page_4 = {
@@ -413,6 +421,7 @@ static void destruct_cb() {
     subject_set_int(cq_enabled, CQ_OFF);
 
     worker_done();
+    ft8_autodnf_on_cleanup();
     table_view_destroy();
 
     /* The LVGL objects themselves are deleted by dialog_destruct() via
@@ -594,6 +603,7 @@ static void construct_cb(lv_obj_t *parent) {
     lv_waterfall_set_min(waterfall, -60);
 
     lv_obj_set_pos(waterfall, 13, 13);
+    ft8_autodnf_set_waterfall(waterfall);
 
     /* Freq finder */
 
@@ -678,6 +688,9 @@ static void construct_cb(lv_obj_t *parent) {
      * Timing: after worker_init() and base gain setup — audio worker and
      * worker/table state is ready; modules may register buttons or load files.
      * Example: ft8_log_on_init(); ft8_autodnf_on_init(); */
+    ft8_autodnf_on_init(dialog.obj);
+    /* Overlay is a waterfall child; keep the decode table on top. */
+    lv_obj_move_foreground(table);
 }
 
 /* Buttons */
@@ -748,6 +761,22 @@ const char *processor_label_getter() {
     sprintf(buf, "Processor:\n%s",
             (proc == FTX_QSO_PROC_NA_VHF) ? "NA VHF" : "Normal");
     return buf;
+}
+
+const char *auto_dnf_label_getter(void) {
+    static char buf[32];
+    sprintf(buf, "Auto DNF:\n%s", subject_get_int(cfg.ft8_auto_dnf.val) ? "On" : "Off");
+    return buf;
+}
+
+static void auto_dnf_cb(struct button_data_t *btn_data) {
+    (void)btn_data;
+    if (disable_buttons) return;
+    bool new_val = !subject_get_int(cfg.ft8_auto_dnf.val);
+    subject_set_int(cfg.ft8_auto_dnf.val, new_val);
+    if (!new_val) {
+        ft8_autodnf_restore_entry();
+    }
 }
 
 static void show_cq_all_cb(struct button_data_t *btn_data) {
@@ -1360,28 +1389,31 @@ static void on_message_cb(const char *text, int snr, float freq_hz, float time_s
 static void flush_ft8_waterfall_cb(void *arg) {
     (void)arg;
 
-    float  local_psd[PSD_STAGING_MAX];
-    size_t local_len;
+    float           local_psd[PSD_STAGING_MAX];
+    size_t          local_len;
+    struct timespec local_ts;
 
     pthread_mutex_lock(&psd_mutex);
     local_len = psd_staging_len;
     if (local_len > 0) {
         memcpy(local_psd, psd_staging, local_len * sizeof(float));
     }
+    local_ts = psd_staging_ts;
     psd_staging_len   = 0;
     psd_flush_pending = false;
     pthread_mutex_unlock(&psd_mutex);
 
     if ((local_len > 0) && waterfall) {
-        lv_waterfall_add_data(waterfall, local_psd, local_len);
+        lv_waterfall_add_data_with_ts(waterfall, local_psd, local_len, local_ts);
     }
 }
 
-static void on_psd_cb(const float *psd, uint16_t nfft, float sec_since_slot_start,
+static void on_psd_cb(const float *psd, uint16_t nfft,
+                      struct timespec frame_ts,
+                      float sec_since_slot_start,
                       const slot_info_t *info, void *ctx) {
-    (void)sec_since_slot_start;
-    (void)info;
     (void)ctx;
+    (void)sec_since_slot_start;
     if (!psd || !nfft) return;
 
     uint32_t low_bin  = (uint32_t)nfft / 2u + (uint32_t)nfft * filter_low  / SAMPLE_RATE;
@@ -1397,12 +1429,21 @@ static void on_psd_cb(const float *psd, uint16_t nfft, float sec_since_slot_star
     pthread_mutex_lock(&psd_mutex);
     memcpy(psd_staging, &psd[low_bin], len * sizeof(float));
     psd_staging_len = len;
+    psd_staging_ts = frame_ts;
 
     bool need_flush = !psd_flush_pending;
     if (need_flush) {
         psd_flush_pending = true;
     }
     pthread_mutex_unlock(&psd_mutex);
+
+    /* Module extension point: psd
+     * Thread: audio worker (same as this callback).
+     * Timing: after core waterfall staging is queued — psd[] and filter bins
+     * are valid; runs once per emitted PSD frame (~10 Hz).
+     * Constraint: no direct lv_* / lv_waterfall_*; use scheduler_put only.
+     * Marker is scheduled before the waterfall flush below. */
+    ft8_autodnf_on_psd(psd, nfft, frame_ts, info);
 
     if (need_flush && !scheduler_put_noargs(flush_ft8_waterfall_cb)) {
         /* Flush item dropped (queue overflow): roll the flag back so a
@@ -1412,13 +1453,6 @@ static void on_psd_cb(const float *psd, uint16_t nfft, float sec_since_slot_star
         psd_flush_pending = false;
         pthread_mutex_unlock(&psd_mutex);
     }
-
-    /* Module extension point: psd
-     * Thread: audio worker (same as this callback).
-     * Timing: after core waterfall staging is queued — psd[] and filter bins
-     * are valid; runs once per emitted PSD frame (~10 Hz).
-     * Constraint: no direct lv_* / lv_waterfall_*; use scheduler_put only.
-     * Example: ft8_autodnf_on_psd(psd, nfft, sec_since_slot_start, info); */
 }
 
 static void on_slot_end_cb(const slot_info_t *info, void *ctx) {
@@ -1497,6 +1531,7 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
          * Use for: TX file log open, DNF marker clear, grid-swap on tx_msg.
          * Cannot defer TX from here without modifying core flow below.
          * Example: ft8_log_on_pre_tx(info); */
+        ft8_autodnf_on_pre_tx(info);
         state = TX_PROCESS;
 
         /* Snapshot the message: the UI thread (on_table_press) may overwrite
@@ -1714,4 +1749,15 @@ static bool free_msg_ok_cb(void) {
 
     free_msg_close();
     return true;
+}
+
+void ft8_get_filter_range(int *low_hz, int *high_hz) {
+    if (low_hz)  *low_hz  = filter_low;
+    if (high_hz) *high_hz = filter_high;
+}
+
+bool ft8_is_our_tx_slot(const slot_info_t *info) {
+    if (!info) return false;
+    return (tx_msg.msg[0] != '\0') && subject_get_int(tx_enabled) &&
+           (tx_time_slot == info->odd);
 }
