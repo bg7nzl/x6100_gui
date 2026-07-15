@@ -102,7 +102,7 @@ NA VHF 档见 [feature-na-vhf-processor.md](feature-na-vhf-processor.md)（交�
 | target + odd | 手动锁定 |
 | sticky ≤5 | 手动重试；RR73/73 不入槽 |
 | last_call | 自动选台粘滞 |
-| blacklist[64] | 自动：order≤2 发起的回复，同文最多 3 次 |
+| blacklist[64] | 自动发起（order≤2）的重试退避，按 TX 文本计数；见 [feature-auto-tx-backoff.md](feature-auto-tx-backoff.md) |
 | peers[256] LRU | 按呼号攒 grid / 报告 / 时间 |
 
 ### Auto / Auto Mode

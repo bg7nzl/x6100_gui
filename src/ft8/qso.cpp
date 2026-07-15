@@ -6,6 +6,7 @@ extern "C" {
 }
 
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -31,7 +32,8 @@ extern "C" {
 namespace {
 
 constexpr int STICKY_RETRY_MAX  = 5;  /* manual: retries while the peer is silent */
-constexpr int AUTO_TX_TEXT_MAX  = 3;  /* auto: initiate (order ≤ 2) at most 3 times */
+constexpr int AUTO_TX_TEXT_SOFT_MAX = 3;  /* auto initiate: then probabilistic retry */
+constexpr int AUTO_TX_TEXT_HARD_MAX = 10; /* auto initiate: absolute stop */
 constexpr int SNR_REPORT_MIN    = -30;
 constexpr int SNR_REPORT_MAX    = 30;
 
@@ -562,6 +564,34 @@ void blacklist_bump(const char *text) {
     e->count++;
 }
 
+int blacklist_count(const char *text) {
+    BlacklistEntry *e = blacklist_find(text);
+    return e ? e->count : 0;
+}
+
+/* Soft-cap then decaying pass chance until hard-cap.
+ * CQ (order 2) starts higher — denser opportunities burn out in wall time
+ * anyway; tail-end (order 0) starts lower but still decays toward hard stop. */
+bool auto_tx_text_allowed(const char *text, int order) {
+    const int count = blacklist_count(text);
+
+    if (count < AUTO_TX_TEXT_SOFT_MAX)
+        return true;
+
+    if (count >= AUTO_TX_TEXT_HARD_MAX)
+        return false;
+
+    /* count == SOFT_MAX is the first probabilistic retry. */
+    const int step = count - AUTO_TX_TEXT_SOFT_MAX;
+
+    const double p0 = (order == 2) ? 0.70 : 0.35;
+    const double decay = 0.90;
+
+    const double p = p0 * std::pow(decay, step);
+
+    return (std::rand() / (RAND_MAX + 1.0)) < p;
+}
+
 bool candidate_distance(const Candidate *cand,
                         double local_lat, double local_lon, double *dist) {
     if (cand->grid[0] == '\0') return false;
@@ -595,10 +625,10 @@ void auto_decide(const ftx_qso_context_t *ctx,
          * once the peer calls us. */
         if (msgs[i].worked && (cand.order <= 2)) continue;
         /* Initiate only (order ≤ 2): CQ reply or tail-end — peer has not
-         * called us yet. Higher orders mean an active QSO — no repeat cap. */
-        if (cand.order <= 2) {
-            BlacklistEntry *e = blacklist_find(cand.text);
-            if (e && e->count >= AUTO_TX_TEXT_MAX) continue;
+         * called us yet. Soft/hard + decaying pass (see auto_tx_text_allowed).
+         * Higher orders mean an active QSO — no repeat cap. */
+        if (cand.order <= 2 && !auto_tx_text_allowed(cand.text, cand.order)) {
+            continue;
         }
         cand.grid_worked = msgs[i].grid_worked;
         cands[n++] = cand;

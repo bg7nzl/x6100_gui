@@ -299,13 +299,33 @@ TEST_CASE("Auto mode SNR", "[ft8_qso]") {
         REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
     }
 
-    SECTION("CQ reply stops after three sends") {
+    SECTION("CQ reply soft-blocks after three sends") {
         for (int i = 0; i < 3; i++) {
             slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
             REQUIRE(response.action == FTX_QSO_ACTION_TX);
         }
-        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
-        REQUIRE(response.action == FTX_QSO_ACTION_RX);
+        /* Decaying pass after soft cap — both outcomes must appear. */
+        int tx = 0, rx = 0;
+        for (int i = 0; i < 200; i++) {
+            slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+            if (response.action == FTX_QSO_ACTION_TX) tx++;
+            else rx++;
+        }
+        REQUIRE(tx > 0);
+        REQUIRE(rx > 0);
+    }
+
+    SECTION("CQ reply hard-stops after ten sends") {
+        int tx = 0;
+        for (int i = 0; i < 500 && tx < 10; i++) {
+            slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+            if (response.action == FTX_QSO_ACTION_TX) tx++;
+        }
+        REQUIRE(tx == 10);
+        for (int i = 0; i < 40; i++) {
+            slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+            REQUIRE(response.action == FTX_QSO_ACTION_RX);
+        }
     }
 
     SECTION("In-progress QSO replies are not blacklisted") {
@@ -323,14 +343,25 @@ TEST_CASE("Auto mode SNR", "[ft8_qso]") {
         REQUIRE(response.action == FTX_QSO_ACTION_RX);
     }
 
-    SECTION("Tail-end stops after three sends") {
+    SECTION("Tail-end soft-blocks after three sends") {
         for (int i = 0; i < 3; i++) {
             slot(&ctx, {make_msg("JA1XYZ EA0DX RR73", 5)}, &response);
             REQUIRE(response.action == FTX_QSO_ACTION_TX);
             REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
         }
-        slot(&ctx, {make_msg("JA1XYZ EA0DX RR73", 5)}, &response);
-        REQUIRE(response.action == FTX_QSO_ACTION_RX);
+        /* Decaying pass after soft cap — both outcomes must appear. */
+        int tx = 0, rx = 0;
+        for (int i = 0; i < 200; i++) {
+            slot(&ctx, {make_msg("JA1XYZ EA0DX RR73", 5)}, &response);
+            if (response.action == FTX_QSO_ACTION_TX) {
+                tx++;
+                REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
+            } else {
+                rx++;
+            }
+        }
+        REQUIRE(tx > 0);
+        REQUIRE(rx > 0);
     }
 }
 
@@ -715,13 +746,20 @@ TEST_CASE("Clear decision state resets the auto blacklist", "[ft8_qso]") {
     ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_PRE);
     ftx_qso_response_t response;
 
-    /* Initiating reply (order ≤ 2) is allowed three times, then blacklisted. */
+    /* Initiating reply (order ≤ 2): three guaranteed sends, then soft-cap. */
     for (int i = 0; i < 3; i++) {
         slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
     }
-    slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
-    REQUIRE(response.action == FTX_QSO_ACTION_RX);
+    bool saw_rx = false;
+    for (int i = 0; i < 100; i++) {
+        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        if (response.action == FTX_QSO_ACTION_RX) {
+            saw_rx = true;
+            break;
+        }
+    }
+    REQUIRE(saw_rx);
 
     ftx_qso_clear_decision_state();
     slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
