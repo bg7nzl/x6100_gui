@@ -440,10 +440,8 @@ bool compute_one(const ftx_qso_context_t *ctx,
         }
     }
 
-    /* Someone else's QSO just ended: tail-end the freed station.
-     * NA VHF never preempts (Pre degrades to Full). */
+    /* Someone else's QSO just ended: tail-end the freed station. */
     if ((meta.type == FTX_MSG_TYPE_RR73) || (meta.type == FTX_MSG_TYPE_73)) {
-        if (is_na_vhf(ctx)) return false;
         cand->order = 0;
         std::snprintf(cand->text, sizeof(cand->text), "%s %s %s",
                       meta.call_de, me, local_qth4(ctx).c_str());

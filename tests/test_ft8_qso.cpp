@@ -854,16 +854,23 @@ TEST_CASE("NA VHF: protocol follow and defaults", "[ft8_qso]") {
     }
 }
 
-TEST_CASE("NA VHF: no tail-end preempt", "[ft8_qso]") {
-    ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_PRE, FTX_QSO_SEL_SNR,
-                                     FTX_QSO_PROC_NA_VHF);
+TEST_CASE("NA VHF: tail-end follows Auto level", "[ft8_qso]") {
     ftx_qso_response_t response;
 
-    slot(&ctx, {make_msg("JA1XYZ K1ABC RR73", 5)}, &response);
-    REQUIRE(response.action == FTX_QSO_ACTION_RX);
+    SECTION("Pre still tail-ends") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_PRE, FTX_QSO_SEL_SNR,
+                                         FTX_QSO_PROC_NA_VHF);
+        slot(&ctx, {make_msg("JA1XYZ K1ABC RR73", 5)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE LO02"));
+    }
 
-    slot(&ctx, {make_msg("JA1XYZ K1ABC 73", 5)}, &response);
-    REQUIRE(response.action == FTX_QSO_ACTION_RX);
+    SECTION("Full still ignores tail-end") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_FULL, FTX_QSO_SEL_SNR,
+                                         FTX_QSO_PROC_NA_VHF);
+        slot(&ctx, {make_msg("JA1XYZ K1ABC RR73", 5)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_RX);
+    }
 }
 
 TEST_CASE("NA VHF: relaxed complete on peer RR73 skip", "[ft8_qso]") {

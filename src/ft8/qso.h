@@ -65,8 +65,8 @@ typedef enum {
 } ftx_qso_sel_t;
 
 /* QSO processor profile (the "Processor" button). NORMAL is everyday FT8;
- * NA_VHF exchanges grids (R grid) instead of signal reports by default and
- * never tail-ends. Mixed-protocol follow still works in both profiles. */
+ * NA_VHF exchanges grids (R grid) instead of signal reports by default.
+ * Mixed-protocol follow still works in both profiles. */
 typedef enum {
     FTX_QSO_PROC_NORMAL = 0,
     FTX_QSO_PROC_NA_VHF,
