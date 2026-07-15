@@ -19,8 +19,8 @@ extern "C" {
  * is touched only by the two public entry points:
  *
  *   ftx_qso_on_user_message    - arms the manual target (callsign + parity
- *                                lock + sticky seed), then evaluates the
- *                                clicked message as a batch of one.
+ *                                lock + sticky seed); someone else's mid-QSO
+ *                                is rewritten to CQ <call> then evaluated.
  *   ftx_qso_on_decoded_messages- per-slot decision. MANUAL: filter the
  *                                batch down to "from target, addressed to
  *                                me", fall back to the sticky message when
@@ -812,8 +812,24 @@ void ftx_qso_on_user_message(const ftx_qso_context_t *ctx,
         return;
     }
 
+    /* Manual click only: someone else's mid-QSO is opaque to compute_one.
+     * Rewrite as CQ <call_de> so the shared path emits Tx2 (same as
+     * clicking their CQ). Messages addressed to us stay untouched; Auto
+     * never enters this entry point. Peer grid was already fed by the
+     * slot-end analyze_rx that put the row on screen. */
+    char rewritten[32];
+    const char *eval_text = text;
+    if (!meta.to_me &&
+        ((meta.type == FTX_MSG_TYPE_GRID) ||
+         (meta.type == FTX_MSG_TYPE_REPORT) ||
+         (meta.type == FTX_MSG_TYPE_R_REPORT) ||
+         (meta.type == FTX_MSG_TYPE_R_GRID))) {
+        std::snprintf(rewritten, sizeof(rewritten), "CQ %s", meta.call_de);
+        eval_text = rewritten;
+    }
+
     /* Arm the manual target: callsign + parity lock, fresh sticky. The
-     * clicked message seeds the sticky slot so a missed TX window is
+     * evaluated message seeds the sticky slot so a missed TX window is
      * regenerated at the next target-parity slot end. */
     g_state.has_target = true;
     g_state.target_odd = rx_odd;
@@ -821,9 +837,9 @@ void ftx_qso_on_user_message(const ftx_qso_context_t *ctx,
     sticky_clear();
 
     Candidate cand;
-    if (compute_one(ctx, text, snr, freq_hz, &cand)) {
+    if (compute_one(ctx, eval_text, snr, freq_hz, &cand)) {
         if ((meta.type != FTX_MSG_TYPE_RR73) && (meta.type != FTX_MSG_TYPE_73)) {
-            sticky_store(text, snr, freq_hz);
+            sticky_store(eval_text, snr, freq_hz);
         }
         copy_str(g_state.last_call, sizeof(g_state.last_call), cand.call);
         emit_candidate(ctx, &cand, false, response);

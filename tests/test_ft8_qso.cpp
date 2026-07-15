@@ -166,6 +166,27 @@ TEST_CASE("Click arms the target and replies one hop", "[ft8_qso]") {
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
         REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
     }
+
+    SECTION("Click someone else's mid-QSO grid calls like CQ") {
+        ftx_qso_on_user_message(&ctx, "JA1XYZ EA0DX KO12", 5, 1500.0f, true, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE(!response.tx_odd);
+        REQUIRE(response.freq_hz == 1500.0f);
+        REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
+    }
+
+    SECTION("Click someone else's mid-QSO report calls like CQ") {
+        ftx_qso_on_user_message(&ctx, "JA1XYZ EA0DX -08", 4, 0.0f, false, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE(response.tx_odd);
+        REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
+    }
+
+    SECTION("Click someone else's R-report calls like CQ") {
+        ftx_qso_on_user_message(&ctx, "JA1XYZ EA0DX R-08", 4, 0.0f, true, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
+    }
 }
 
 TEST_CASE("Manual QSO progression", "[ft8_qso]") {

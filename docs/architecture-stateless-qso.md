@@ -31,11 +31,14 @@ compute_one(一条解码) → 至多一条回复（带 order）
 
 ### 点击处理
 
-`ftx_qso_on_user_message` 做三件事：
+`ftx_qso_on_user_message`（仅手动点击入口，Auto 不走这里）：
 
-1. 设手动目标（呼号加奇偶锁定）；
-2. 种进粘性槽；
-3. 把这条消息当作长度为 1 的批量，跑同一条决策管线。
+1. 解析点击行；若是**别人通联中途**（GRID / ±nn / R±nn / R-grid，且 `!to_me`），先改写成 `CQ <call_de>`——对方网格已在此前 slot end 的 `analyze_rx` 进过 peers，合成 CQ 不必再带 grid；
+2. 设手动目标（呼号加奇偶锁定）；
+3. 种进粘性槽（存的是评估用文本，因此中途行会以 `CQ <call>` 形式重试）；
+4. 对评估文本跑 `compute_one`，与点 CQ / 点别人 RR73·73（tail-end）一样发出 Tx2。
+
+叫你的消息不改写，仍按阶梯回一步。叫你的 73 无话可回（`action=RX`）。
 
 能不能赶上本隙由 dialog 的 tick 判断，引擎不管墙钟。
 
@@ -53,9 +56,10 @@ RR73 是特例：回 73 不进粘性槽，避免对方已经停发、这边还�
 ### 数据流
 
 ```text
-表格点击 ──► ftx_qso_on_user_message ─┐
-                                       ├─► decide() ─► ftx_qso_response_t
-slot end  ──► ftx_qso_on_decoded_messages ─┘              │
+表格点击 ──► ftx_qso_on_user_message ──►（可选改写为 CQ）──► compute_one ─┐
+                                                                          ├─► response
+slot end  ──► ftx_qso_on_decoded_messages ──► decide() ──────────────────┘
+                                                          │
                                                           ▼
                                               apply_qso_response（dialog）
                                                           │
@@ -69,7 +73,7 @@ slot end  ──► ftx_qso_on_decoded_messages ─┘              │
 | 接口 | 作用 |
 |------|------|
 | `ftx_qso_on_decoded_messages` | slot end；`n` 可以为 0 |
-| `ftx_qso_on_user_message` | 点击 |
+| `ftx_qso_on_user_message` | 点击（别人中途行先改写成 `CQ <call>`） |
 | `ftx_qso_parse_rx_text` | 解析（UI 高亮也用它） |
 | `ftx_qso_flush_complete` | 弹出报告齐全、但没收 / 发 73 的 QSO |
 | `ftx_qso_reset` | 会话开始时清掉全部内部状态 |
