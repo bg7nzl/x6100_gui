@@ -200,6 +200,12 @@ keypad_t * keypad_init(char *dev_name) {
 
     fcntl(fd, F_SETFL, O_ASYNC | O_NONBLOCK);
 
+    /* Drop events queued before this process started (e.g. LOCK release
+     * left in the buffer after a long-press BB reset restart). */
+    struct input_event drain;
+    while (read(fd, &drain, sizeof(drain)) > 0) {
+    }
+
     keypad_t *keypad = malloc(sizeof(keypad_t));
 
     keypad->fd = fd;

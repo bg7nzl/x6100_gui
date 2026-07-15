@@ -63,6 +63,10 @@ static Subject      *freq_lock;
 static bool         mode_lock = false;
 static bool         ab_lock = false;
 static bool         band_lock = false;
+/* Long-press LOCK arms BB reset; run it on LONG_RELEASE so the key is up
+ * before exit. Resetting on LONG while held makes the post-restart RELEASE
+ * look like a short press and toggles freq_lock on. */
+static bool         lock_bb_reset_pending = false;
 
 static lv_obj_t     *spectrum;
 static lv_obj_t     *freq[3];
@@ -643,8 +647,14 @@ static void main_screen_keypad_cb(lv_event_t * e) {
                 subject_set_int(freq_lock, !subject_get_int(freq_lock));
                 voice_say_text_fmt("Frequency %s", subject_get_int(freq_lock) ? "locked" : "unlocked");
             } else if (keypad->state == KEYPAD_LONG) {
-                radio_bb_reset();
-                exit(1);
+                lock_bb_reset_pending = true;
+                msg_update_text_fmt("Baseband reset...");
+            } else if (keypad->state == KEYPAD_LONG_RELEASE) {
+                if (lock_bb_reset_pending) {
+                    lock_bb_reset_pending = false;
+                    radio_bb_reset();
+                    exit(1);
+                }
             }
             break;
 

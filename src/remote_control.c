@@ -154,6 +154,10 @@ static void handle_key_command(const char *name, const char *action) {
     } else {
         keypad_state_t state = parse_key_state(action_name);
         send_keypad_event(key, state);
+        /* LOCK BB reset arms on LONG and runs on LONG_RELEASE. */
+        if (key == KEYPAD_LOCK && state == KEYPAD_LONG) {
+            send_keypad_event(key, KEYPAD_LONG_RELEASE);
+        }
     }
 }
 
