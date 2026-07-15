@@ -27,11 +27,14 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 #include "lvgl/lvgl.h"
 
 #include "../qso_log.h"
+#include "ft8_remote.h"
 #include "qso.h"   /* ftx_msg_meta_t */
 
 #ifdef __cplusplus
@@ -55,6 +58,11 @@ typedef struct {
     ftx_msg_meta_t          meta;
     char                    text[64];
     qso_log_search_worked_t worked_type;
+    uint32_t                id;
+    time_t                  time;
+    bool                    call_worked;
+    bool                    grid_worked;
+    bool                    call_grid_worked;
 } cell_data_t;
 
 /* Optional dialog-level actions invoked from the table's key handler. */
@@ -84,6 +92,13 @@ void table_view_push_ui(const cell_data_t *src);
  * to a cell_data_t value copy that the scheduler will free after this
  * returns; table_view_push_ui() takes its own snapshot into the ring pool. */
 void table_view_add_msg_cb(void *data);
+
+/* Snapshot message rows (no RX_INFO/TX_INFO headers) in display order.
+ * Writes at most max trailing rows; returns number written. */
+size_t table_view_snapshot(ft8_remote_row_t *out, size_t max);
+
+/* Look up a pooled cell by stable id; NULL if truncated or unknown. */
+const cell_data_t *table_view_find_by_id(uint32_t id);
 
 #ifdef __cplusplus
 }

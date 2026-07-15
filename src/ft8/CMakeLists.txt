@@ -7,6 +7,7 @@ add_library(FT8 STATIC
     auto_dnf.c
     params.c
     ft8_log.c
+    ft8_remote.c
 )
 
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/..")

@@ -38,6 +38,7 @@
 #include "ft8/table_view.h"
 #include "ft8/tx_worker.h"
 #include "ft8/ft8_log.h"
+#include "ft8/ft8_remote.h"
 #include "widgets/lv_waterfall.h"
 #include "widgets/lv_finder.h"
 
@@ -94,12 +95,8 @@ static Subject    *tx_enabled;
 /* TX CQ button tri-state: Off, or an explicit TX slot parity picked by
  * the user (no clock guessing). Non-zero means the CQ loop is running;
  * the value doubles as the parity anchor the loop resumes to after an
- * interleaved QSO. Session-local: every dialog run starts at Off. */
-typedef enum {
-    CQ_OFF = 0,
-    CQ_EVEN,
-    CQ_ODD,
-} cq_state_t;
+ * interleaved QSO. Session-local: every dialog run starts at Off.
+ * cq_state_t is declared in dialog_ft8.h. */
 static Subject    *cq_enabled;
 
 /* Auto behaviour level (ftx_qso_auto_t). Session-local, starts at Off;
@@ -425,6 +422,7 @@ static void destruct_cb() {
     worker_done();
     ft8_log_on_cleanup();
     ft8_autodnf_on_cleanup();
+    ft8_remote_on_cleanup();
     table_view_destroy();
 
     /* The LVGL objects themselves are deleted by dialog_destruct() via
@@ -693,6 +691,7 @@ static void construct_cb(lv_obj_t *parent) {
      * Example: ft8_log_on_init(); ft8_autodnf_on_init(); */
     ft8_log_on_init();
     ft8_autodnf_on_init(dialog.obj);
+    ft8_remote_on_init();
     /* Overlay is a waterfall child; keep the decode table on top. */
     lv_obj_move_foreground(table);
 }
@@ -776,16 +775,12 @@ const char *auto_dnf_label_getter(void) {
 static void auto_dnf_cb(struct button_data_t *btn_data) {
     (void)btn_data;
     if (disable_buttons) return;
-    bool new_val = !subject_get_int(cfg.ft8_auto_dnf.val);
-    subject_set_int(cfg.ft8_auto_dnf.val, new_val);
-    if (!new_val) {
-        ft8_autodnf_restore_entry();
-    }
+    ft8_set_auto_dnf(!subject_get_int(cfg.ft8_auto_dnf.val));
 }
 
 static void show_cq_all_cb(struct button_data_t *btn_data) {
     if (disable_buttons) return;
-    subject_set_int(cfg.ft8_show_all.val, !subject_get_int(cfg.ft8_show_all.val));
+    ft8_set_show_all(!subject_get_int(cfg.ft8_show_all.val));
 }
 
 static void mode_ft4_ft8_cb(struct button_data_t *btn_data) {
@@ -797,13 +792,7 @@ static void mode_ft4_ft8_cb(struct button_data_t *btn_data) {
     else {
         proto = FTX_PROTOCOL_FT8;
     }
-    subject_set_int(cfg.ft8_protocol.val, proto);
-    subject_set_int(cq_enabled, CQ_OFF);
-
-    worker_done();
-    worker_init();
-    clean_screen();
-    load_band(0);
+    ft8_set_protocol(proto);
 }
 
 /* Any Auto / Auto Mode / click change ends the CQ loop and restarts the
@@ -831,8 +820,7 @@ static void mode_auto_cb(struct button_data_t *btn_data) {
     } else {
         level++;
     }
-    subject_set_int(auto_level, level);
-    qso_setting_changed();
+    ft8_set_auto_level((ftx_qso_auto_t)level);
 }
 
 static void mode_auto_sel_cb(struct button_data_t *btn_data) {
@@ -843,8 +831,7 @@ static void mode_auto_sel_cb(struct button_data_t *btn_data) {
     } else {
         sel++;
     }
-    subject_set_int(cfg.ft8_auto_mode.val, sel);
-    qso_setting_changed();
+    ft8_set_auto_mode((ftx_qso_sel_t)sel);
 }
 
 static void mode_processor_cb(struct button_data_t *btn_data) {
@@ -855,13 +842,12 @@ static void mode_processor_cb(struct button_data_t *btn_data) {
     } else {
         proc = FTX_QSO_PROC_NORMAL;
     }
-    subject_set_int(qso_proc, proc);
-    qso_setting_changed();
+    ft8_set_processor((ftx_qso_proc_t)proc);
 }
 
 static void hold_tx_freq_cb(struct button_data_t *btn_data) {
     if (disable_buttons) return;
-    subject_set_int(cfg.ft8_hold_freq.val, !subject_get_int(cfg.ft8_hold_freq.val));
+    ft8_set_hold_freq(!subject_get_int(cfg.ft8_hold_freq.val));
 }
 
 /* (Re)load the CQ text into tx_msg with a fresh repeats budget, aimed at
@@ -880,13 +866,57 @@ static void cq_rearm(void) {
     tx_time_slot = (subject_get_int(cq_enabled) == CQ_ODD);
 }
 
-static void tx_cq_en_dis_cb(struct button_data_t *btn_data) {
+void ft8_set_auto_dnf(bool enable) {
+    if (disable_buttons) return;
+    subject_set_int(cfg.ft8_auto_dnf.val, enable);
+    if (!enable) {
+        ft8_autodnf_restore_entry();
+    }
+}
+
+void ft8_set_show_all(bool show_all) {
+    if (disable_buttons) return;
+    subject_set_int(cfg.ft8_show_all.val, show_all);
+}
+
+void ft8_set_protocol(ftx_protocol_t proto) {
+    if (disable_buttons) return;
+    subject_set_int(cfg.ft8_protocol.val, proto);
+    subject_set_int(cq_enabled, CQ_OFF);
+
+    worker_done();
+    worker_init();
+    clean_screen();
+    load_band(0);
+}
+
+void ft8_set_auto_level(ftx_qso_auto_t level) {
+    if (disable_buttons) return;
+    subject_set_int(auto_level, level);
+    qso_setting_changed();
+}
+
+void ft8_set_auto_mode(ftx_qso_sel_t sel) {
+    if (disable_buttons) return;
+    subject_set_int(cfg.ft8_auto_mode.val, sel);
+    qso_setting_changed();
+}
+
+void ft8_set_processor(ftx_qso_proc_t proc) {
+    if (disable_buttons) return;
+    subject_set_int(qso_proc, proc);
+    qso_setting_changed();
+}
+
+void ft8_set_hold_freq(bool hold) {
+    if (disable_buttons) return;
+    subject_set_int(cfg.ft8_hold_freq.val, hold);
+}
+
+void ft8_set_cq(cq_state_t st) {
     if (disable_buttons) return;
 
-    int cq = subject_get_int(cq_enabled);
-    cq = ((cq < CQ_OFF) || (cq >= CQ_ODD)) ? CQ_OFF : (cq + 1);
-
-    if (cq == CQ_OFF) {
+    if (st == CQ_OFF) {
         if (state == TX_PROCESS) {
             state = RX_PROCESS;
         }
@@ -898,13 +928,11 @@ static void tx_cq_en_dis_cb(struct button_data_t *btn_data) {
 
     if (strlen(params.callsign.x) == 0) {
         msg_schedule_text_fmt("Call sign required");
+        ft8_remote_set_status("Call sign required");
         return;
     }
 
-    /* Entering Even (or flipping to Odd) restarts the CQ session on the
-     * chosen parity. A CQ loop is served by the responder level: the
-     * engine answers stations calling me and never initiates on its own. */
-    subject_set_int(cq_enabled, cq);
+    subject_set_int(cq_enabled, st);
     subject_set_int(tx_enabled, true);
     subject_set_int(auto_level, FTX_QSO_AUTO_RES);
     ftx_qso_clear_decision_state();
@@ -912,19 +940,27 @@ static void tx_cq_en_dis_cb(struct button_data_t *btn_data) {
 
     if (tx_msg.msg[2] == '_') {
         msg_schedule_text_fmt("Next TX: CQ %s", tx_msg.msg + 3);
+        char status[64];
+        snprintf(status, sizeof(status), "Next TX: CQ %s", tx_msg.msg + 3);
+        ft8_remote_set_status(status);
     } else {
         msg_schedule_text_fmt("Next TX: %s", tx_msg.msg);
+        char status[64];
+        snprintf(status, sizeof(status), "Next TX: %s", tx_msg.msg);
+        ft8_remote_set_status(status);
     }
-    lv_finder_clear_cursor(finder);
+    if (finder) {
+        lv_finder_clear_cursor(finder);
+    }
 }
 
-static void tx_call_en_dis_cb(struct button_data_t *btn_data) {
-    if (disable_buttons)
-        return;
+void ft8_set_tx_call(bool enable) {
+    if (disable_buttons) return;
 
-    if (!subject_get_int(tx_enabled)) {
+    if (enable) {
         if (strlen(params.callsign.x) == 0) {
             msg_schedule_text_fmt("Call sign required");
+            ft8_remote_set_status("Call sign required");
             return;
         }
         subject_set_int(tx_enabled, true);
@@ -934,6 +970,21 @@ static void tx_call_en_dis_cb(struct button_data_t *btn_data) {
         }
         subject_set_int(tx_enabled, false);
     }
+}
+
+static void tx_cq_en_dis_cb(struct button_data_t *btn_data) {
+    if (disable_buttons) return;
+
+    int cq = subject_get_int(cq_enabled);
+    cq = ((cq < CQ_OFF) || (cq >= CQ_ODD)) ? CQ_OFF : (cq + 1);
+    ft8_set_cq((cq_state_t)cq);
+}
+
+static void tx_call_en_dis_cb(struct button_data_t *btn_data) {
+    if (disable_buttons)
+        return;
+
+    ft8_set_tx_call(!subject_get_int(tx_enabled));
 }
 
 static void tx_call_off() {
@@ -946,7 +997,7 @@ static void cq_modifier_cb(struct button_data_t *btn_data) {
     keyboard_open();
 }
 
-static void time_sync(struct button_data_t *btn_data) {
+void ft8_time_sync(void) {
     time_t now = time(NULL);
     uint8_t sec = now % 60;
     float drift, slot_time;
@@ -956,6 +1007,9 @@ static void time_sync(struct button_data_t *btn_data) {
             break;
 
         case FTX_PROTOCOL_FT8:
+            slot_time = FT8_SLOT_TIME;
+            break;
+        default:
             slot_time = FT8_SLOT_TIME;
             break;
     }
@@ -974,15 +1028,28 @@ static void time_sync(struct button_data_t *btn_data) {
     }
 }
 
-static void force_save_qso(struct button_data_t *btn_data) {
+static void time_sync(struct button_data_t *btn_data) {
     (void)btn_data;
+    ft8_time_sync();
+}
+
+void ft8_force_save(void) {
     size_t n = flush_unfinished_qsos();
     if (n > 0) {
         msg_schedule_text_fmt("Saved %u QSO%s", (unsigned)n, (n > 1) ? "s" : "");
+        char status[64];
+        snprintf(status, sizeof(status), "Saved %u QSO%s", (unsigned)n, (n > 1) ? "s" : "");
+        ft8_remote_set_status(status);
         finder_clear_cursor_async();
     } else {
         msg_schedule_text_fmt("No QSO to save");
+        ft8_remote_set_status("No QSO to save");
     }
+}
+
+static void force_save_qso(struct button_data_t *btn_data) {
+    (void)btn_data;
+    ft8_force_save();
 }
 
 static void on_table_press(const cell_data_t *cell_data) {
@@ -1020,13 +1087,15 @@ static void on_table_press(const cell_data_t *cell_data) {
     if (response.action == FTX_QSO_ACTION_TX) {
         apply_qso_response(&response, false);
         {
-            cell_data_t cd;
+            cell_data_t cd = {0};
             cd.cell_type = CELL_START_QSO;
+            cd.time = time(NULL);
             snprintf(cd.text, sizeof(cd.text), "Start QSO with %s", cell_data->meta.call_de);
             scheduler_put(table_view_add_msg_cb, &cd, sizeof(cell_data_t));
         }
     } else {
         msg_schedule_text_fmt("Invalid message");
+        ft8_remote_set_status("Invalid message");
         tx_call_off();
     }
 }
@@ -1074,9 +1143,10 @@ static bool keyboard_ok_cb() {
     char *cq_mod = (char *)textarea_window_get();
     if ((strlen(cq_mod) > 0) && !is_cq_modifier(cq_mod)) {
         msg_schedule_text_fmt("Unsupported CQ modifier");
+        ft8_remote_set_status("Unsupported CQ modifier");
         return false;
     }
-    params_str_set(&params.ft8_cq_modifier, cq_mod);
+    ft8_set_cq_modifier(cq_mod);
     keyboard_close();
     return true;
 }
@@ -1139,8 +1209,9 @@ static void add_slot_info(ft8_cell_type_t cell_type, const char *direction) {
  * Add TX message to the table
  */
 static void add_tx_text(const char * text) {
-    cell_data_t  cell_data;
+    cell_data_t  cell_data = {0};
     cell_data.cell_type = CELL_TX_MSG;
+    cell_data.time = time(NULL);
 
     strncpy(cell_data.text, text, sizeof(cell_data.text) - 1);
     if (strncmp(cell_data.text, "CQ_", 3) == 0) {
@@ -1318,6 +1389,11 @@ static void apply_qso_response(const ftx_qso_response_t *response,
     }
 
     msg_schedule_text_fmt("Next TX: %s", tx_msg.msg);
+    {
+        char status[64];
+        snprintf(status, sizeof(status), "Next TX: %s", tx_msg.msg);
+        ft8_remote_set_status(status);
+    }
 }
 
 /**
@@ -1341,16 +1417,28 @@ static void add_rx_text(int16_t snr, const char * text, slot_info_t *s_info, flo
         cell_type = CELL_RX_MSG;
     }
 
-    cell_data_t  cell_data;
+    cell_data_t  cell_data = {0};
+    cell_data.time = time(NULL);
+
+    qso_log_mode_t mode = subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8
+        ? MODE_FT8 : MODE_FT4;
+    qso_log_band_t band = qso_log_freq_to_band(subject_get_int(cfg_cur.fg_freq));
+    bool contest = (subject_get_int(qso_proc) == FTX_QSO_PROC_NA_VHF);
+
+    qso_log_search_worked_t sw = contest
+        ? qso_log_search_worked_contest(meta->call_de, mode, band)
+        : qso_log_search_worked(meta->call_de, mode, band);
+    cell_data.call_worked = (sw != SEARCH_WORKED_NO);
     if (meta->type == FTX_MSG_TYPE_CQ) {
-        qso_log_mode_t mode = subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8
-            ? MODE_FT8 : MODE_FT4;
-        qso_log_band_t band = qso_log_freq_to_band(subject_get_int(cfg_cur.fg_freq));
-        if (subject_get_int(qso_proc) == FTX_QSO_PROC_NA_VHF) {
-            cell_data.worked_type = qso_log_search_worked_contest(meta->call_de, mode, band);
-        } else {
-            cell_data.worked_type = qso_log_search_worked(meta->call_de, mode, band);
-        }
+        cell_data.worked_type = sw;
+    }
+
+    {
+        bool pair = false;
+        bool grid = true;
+        worked_flags(meta, &pair, &grid);
+        cell_data.call_grid_worked = pair;
+        cell_data.grid_worked = grid;
     }
 
     cell_data.cell_type = cell_type;
@@ -1721,11 +1809,8 @@ static bool free_msg_ok_cb(void) {
     ft8_freetext_sanitize(raw, clean, sizeof(clean));
     if (clean[0] == '\0') {
         msg_schedule_text_fmt("Empty Free MSG");
+        ft8_remote_set_status("Empty Free MSG");
         return false;
-    }
-
-    if (!ft8_freetext_save(clean)) {
-        msg_schedule_text_fmt("Save Free MSG failed");
     }
 
     {
@@ -1733,18 +1818,60 @@ static bool free_msg_ok_cb(void) {
         ftx_message_rc_t rc = ftx_message_encode_free(&tmp_msg, clean);
         if (rc != FTX_MESSAGE_RC_OK) {
             msg_schedule_text_fmt("Free MSG too long for FT8");
+            ft8_remote_set_status("Free MSG too long for FT8");
             return false;
         }
     }
 
-    /* Direct schedule: no QSO-state gate. CQ yields the TX slot. */
+    free_msg_close();
+    ft8_apply_free_msg(clean);
+    return true;
+}
+
+void ft8_set_cq_modifier(const char *cq_mod) {
+    if (!cq_mod) {
+        cq_mod = "";
+    }
+    if ((strlen(cq_mod) > 0) && !is_cq_modifier(cq_mod)) {
+        msg_schedule_text_fmt("Unsupported CQ modifier");
+        ft8_remote_set_status("Unsupported CQ modifier");
+        return;
+    }
+    params_str_set(&params.ft8_cq_modifier, cq_mod);
+}
+
+void ft8_apply_free_msg(const char *text) {
+    if (disable_buttons) return;
+
+    char clean[FT8_FREETEXT_MAX_LEN + 1];
+    ft8_freetext_sanitize(text ? text : "", clean, sizeof(clean));
+    if (clean[0] == '\0') {
+        msg_schedule_text_fmt("Empty Free MSG");
+        ft8_remote_set_status("Empty Free MSG");
+        return;
+    }
+
+    if (!ft8_freetext_save(clean)) {
+        msg_schedule_text_fmt("Save Free MSG failed");
+        ft8_remote_set_status("Save Free MSG failed");
+    }
+
+    {
+        ftx_message_t    tmp_msg;
+        ftx_message_rc_t rc = ftx_message_encode_free(&tmp_msg, clean);
+        if (rc != FTX_MESSAGE_RC_OK) {
+            msg_schedule_text_fmt("Free MSG too long for FT8");
+            ft8_remote_set_status("Free MSG too long for FT8");
+            return;
+        }
+    }
+
     subject_set_int(cq_enabled, CQ_OFF);
 
     strncpy(tx_msg.msg, clean, sizeof(tx_msg.msg) - 1);
     tx_msg.msg[sizeof(tx_msg.msg) - 1] = '\0';
     tx_msg.repeats = 1;
     tx_msg.force_free_text = true;
-    /* Missed start window defers to the next same-parity slot. */
     tx_msg_oneshot = false;
 
     struct timespec now;
@@ -1759,9 +1886,38 @@ static bool free_msg_ok_cb(void) {
 
     subject_set_int(tx_enabled, true);
     msg_schedule_text_fmt("Next TX: %s", tx_msg.msg);
+    {
+        char status[64];
+        snprintf(status, sizeof(status), "Next TX: %s", tx_msg.msg);
+        ft8_remote_set_status(status);
+    }
+    ft8_remote_note_free_msg(clean);
+}
 
-    free_msg_close();
-    return true;
+void ft8_remote_click(uint32_t row_id) {
+    if (disable_buttons) return;
+    const cell_data_t *cell = table_view_find_by_id(row_id);
+    if (!cell) {
+        ft8_remote_set_status("Row not found");
+        return;
+    }
+    on_table_press(cell);
+}
+
+void ft8_set_tx_delta(int hz) {
+    if (disable_buttons) return;
+    if (!ft8_remote_active()) return;
+    set_freq((uint32_t)hz);
+}
+
+void ft8_band(int dir) {
+    if (disable_buttons) return;
+    if (!dialog.obj) return;
+    if (dir > 0) {
+        lv_event_send(dialog.obj, EVENT_BAND_UP, NULL);
+    } else if (dir < 0) {
+        lv_event_send(dialog.obj, EVENT_BAND_DOWN, NULL);
+    }
 }
 
 void ft8_get_filter_range(int *low_hz, int *high_hz) {
@@ -1773,4 +1929,80 @@ bool ft8_is_our_tx_slot(const slot_info_t *info) {
     if (!info) return false;
     return (tx_msg.msg[0] != '\0') && subject_get_int(tx_enabled) &&
            (tx_time_slot == info->odd);
+}
+
+bool ft8_remote_active(void) {
+    return dialog_ft8 && dialog_ft8->run;
+}
+
+int ft8_remote_protocol(void) {
+    return subject_get_int(cfg.ft8_protocol.val);
+}
+
+int ft8_remote_cq_state(void) {
+    if (!cq_enabled) return CQ_OFF;
+    return subject_get_int(cq_enabled);
+}
+
+int ft8_remote_auto_level(void) {
+    if (!auto_level) return FTX_QSO_AUTO_OFF;
+    return subject_get_int(auto_level);
+}
+
+int ft8_remote_auto_mode(void) {
+    return subject_get_int(cfg.ft8_auto_mode.val);
+}
+
+int ft8_remote_processor(void) {
+    if (!qso_proc) return FTX_QSO_PROC_NORMAL;
+    return subject_get_int(qso_proc);
+}
+
+bool ft8_remote_show_all(void) {
+    return subject_get_int(cfg.ft8_show_all.val) != 0;
+}
+
+bool ft8_remote_hold_freq(void) {
+    return subject_get_int(cfg.ft8_hold_freq.val) != 0;
+}
+
+bool ft8_remote_tx_call(void) {
+    if (!tx_enabled) return false;
+    return subject_get_int(tx_enabled) != 0;
+}
+
+bool ft8_remote_auto_dnf(void) {
+    return subject_get_int(cfg.ft8_auto_dnf.val) != 0;
+}
+
+bool ft8_remote_tx_active(void) {
+    return state == TX_PROCESS;
+}
+
+int ft8_remote_tx_delta(void) {
+    return params.ft8_tx_freq.x;
+}
+
+void ft8_remote_filter_range(int *lo, int *hi) {
+    ft8_get_filter_range(lo, hi);
+}
+
+const char *ft8_remote_band_label(void) {
+    return cfg_digital_label_get();
+}
+
+const char *ft8_remote_cq_modifier(void) {
+    return params.ft8_cq_modifier.x;
+}
+
+const char *ft8_remote_next_tx(void) {
+    return tx_msg.msg;
+}
+
+const char *ft8_remote_de_call(void) {
+    return params.callsign.x;
+}
+
+const char *ft8_remote_de_grid(void) {
+    return params.qth.x;
 }

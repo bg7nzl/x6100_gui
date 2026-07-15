@@ -40,6 +40,7 @@
 #include "usb_devices.h"
 #include "remote_control.h"
 #include "remote_screen.h"
+#include "ft8/ft8_remote.h"
 #include "tx_log.h"
 
 #define DISP_BUF_SIZE (800 * 480 * 4)
@@ -82,6 +83,7 @@ int main(void) {
 
     keyboard_init();
     remote_control_init();
+    ft8_remote_init();
 
     keypad_init("/dev/input/event0");
     keypad_init("/dev/input/event4");
@@ -143,6 +145,7 @@ int main(void) {
         event_obj_check();
         remote_control_poll();
         remote_screen_tick();
+        ft8_remote_tick();
         scheduler_work();
         next_loop_time = lv_timer_handler() + loop_start_time;
         sleep_time = next_loop_time - get_time();

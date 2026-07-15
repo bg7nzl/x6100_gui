@@ -8,9 +8,11 @@
 
 #include "table_view.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "../events.h"
 
@@ -39,6 +41,7 @@
 static cell_data_t            s_pool[CELL_POOL_SIZE];
 static uint16_t               s_pool_write = 0;
 static cell_data_t           *s_row_cell[TABLE_MAX_ROWS_INTERNAL]; /* row -> pool entry, NULL if none */
+static uint32_t               s_next_id = 1;
 
 static lv_obj_t              *s_table      = NULL;
 static table_view_press_cb_t  s_press_cb   = NULL;
@@ -59,6 +62,10 @@ static cell_data_t *pool_alloc_and_copy(const cell_data_t *src) {
     s_pool_write = (uint16_t)((s_pool_write + 1u) % CELL_POOL_SIZE);
     *c = *src;
     c->text[sizeof(c->text) - 1] = '\0';
+    c->id = s_next_id++;
+    if (s_next_id == 0) {
+        s_next_id = 1;
+    }
     return c;
 }
 
@@ -151,6 +158,67 @@ void table_view_add_msg_cb(void *data) {
     table_view_push_ui((const cell_data_t *)data);
 }
 
+size_t table_view_snapshot(ft8_remote_row_t *out, size_t max) {
+    if (!s_table || !out || max == 0) {
+        return 0;
+    }
+
+    uint16_t rows = lv_table_get_row_cnt(s_table);
+    uint16_t msg_rows[MAX_TABLE_MSG];
+    size_t   nmsg = 0;
+
+    for (uint16_t r = 0; r < rows && nmsg < MAX_TABLE_MSG; r++) {
+        cell_data_t *cd = row_cell(r);
+        if (!cd) {
+            continue;
+        }
+        if (cd->cell_type == CELL_RX_INFO || cd->cell_type == CELL_TX_INFO) {
+            continue;
+        }
+        msg_rows[nmsg++] = r;
+    }
+
+    size_t start = (nmsg > max) ? (nmsg - max) : 0;
+    size_t written = 0;
+    for (size_t i = start; i < nmsg; i++) {
+        cell_data_t *cd = row_cell(msg_rows[i]);
+        if (!cd) {
+            continue;
+        }
+        ft8_remote_row_t *row = &out[written];
+        memset(row, 0, sizeof(*row));
+        row->id               = cd->id;
+        row->time_utc         = (uint32_t)cd->time;
+        row->type             = (uint8_t)cd->cell_type;
+        row->odd              = cd->odd ? 1u : 0u;
+        row->call_worked      = cd->call_worked ? 1u : 0u;
+        row->grid_worked      = cd->grid_worked ? 1u : 0u;
+        row->call_grid_worked = cd->call_grid_worked ? 1u : 0u;
+        row->snr_db           = (int16_t)cd->meta.local_snr;
+        row->delta_hz         = (int16_t)lroundf(cd->meta.freq_hz);
+        row->dist_km          = cd->dist;
+        strncpy(row->text, cd->text, sizeof(row->text) - 1);
+        strncpy(row->call, cd->meta.call_de, sizeof(row->call) - 1);
+        strncpy(row->grid, cd->meta.grid, sizeof(row->grid) - 1);
+        written++;
+    }
+    return written;
+}
+
+const cell_data_t *table_view_find_by_id(uint32_t id) {
+    if (!s_table || id == 0) {
+        return NULL;
+    }
+    uint16_t rows = lv_table_get_row_cnt(s_table);
+    for (uint16_t r = 0; r < rows; r++) {
+        cell_data_t *cd = row_cell(r);
+        if (cd && cd->id == id) {
+            return cd;
+        }
+    }
+    return NULL;
+}
+
 void table_view_reset(void) {
     if (!s_table) return;
 
@@ -161,6 +229,7 @@ void table_view_reset(void) {
     lv_table_set_row_cnt(s_table, 1);
     lv_table_set_cell_value(s_table, 0, 0, WAIT_SYNC_TEXT);
     s_pool_write = 0;
+    s_next_id = 1;
 }
 
 /* -------- LVGL event plumbing ------------------------------------------ */
@@ -299,6 +368,7 @@ static void key_cb(lv_event_t *e) {
 
 void table_view_build(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h) {
     s_pool_write = 0;
+    s_next_id    = 1;
     s_press_cb   = NULL;
     memset(&s_actions, 0, sizeof(s_actions));
     memset(s_row_cell, 0, sizeof(s_row_cell));
@@ -342,6 +412,7 @@ void table_view_destroy(void) {
     memset(&s_actions, 0, sizeof(s_actions));
     memset(s_row_cell, 0, sizeof(s_row_cell));
     s_pool_write = 0;
+    s_next_id = 1;
 }
 
 lv_obj_t *table_view_obj(void) {

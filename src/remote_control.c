@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include "events.h"
+#include "ft8/ft8_remote.h"
 #include "main.h"
 #include "vol.h"
 #include "backlight.h"
@@ -211,6 +212,22 @@ static void handle_line(const char *line) {
     char cmd[REMOTE_LINE_MAX] = {0};
     char arg1[REMOTE_LINE_MAX] = {0};
     char arg2[REMOTE_LINE_MAX] = {0};
+
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    if (((p[0] == 'F') || (p[0] == 'f')) &&
+        ((p[1] == 'T') || (p[1] == 't')) &&
+        (p[2] == '8') &&
+        (p[3] == ' ' || p[3] == '\t' || p[3] == '\0')) {
+        backlight_tick();
+        if (p[3] == '\0') {
+            return;
+        }
+        ft8_remote_command(p + 4);
+        return;
+    }
 
     if (sscanf(line, "%255s %255s %255s", cmd, arg1, arg2) < 2) {
         return;
