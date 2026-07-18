@@ -76,10 +76,11 @@ slot end  ──► ftx_qso_on_decoded_messages ──► decide() ────�
 | `ftx_qso_on_user_message` | 点击（别人中途行先改写成 `CQ <call>`） |
 | `ftx_qso_parse_rx_text` | 解析（UI 高亮也用它） |
 | `ftx_qso_flush_complete` | 弹出报告齐全、但没收 / 发 73 的 QSO |
-| `ftx_qso_reset` | 会话开始时清掉全部内部状态 |
-| `ftx_qso_clear_decision_state` | 清 target / sticky / blacklist / last_call，peers 保留 |
+| `ftx_qso_reset` | 会话开始时清掉全部内部状态（含确认名单） |
+| `ftx_qso_clear_decision_state` | 清 target / sticky / blacklist / last_call / pending，peers 与确认名单保留 |
+| `ftx_qso_commit_pending` / `ftx_qso_abort_pending` | 操作员同意 / 放弃一条待确认的自动 Tx2（见 [feature-auto-tx2-confirm.md](feature-auto-tx2-confirm.md)） |
 
-`response.action` 是 `RX` 或 `TX`。`save` 和 `qso` 与 action 相互独立（可以 RX 的同时入库）。
+`response.action` 是 `RX` 或 `TX`。`save` 和 `qso` 与 action 相互独立（可以 RX 的同时入库）。`need_confirm` 表示自动路径选中了一条未确认的发起 Tx2：action 保持 RX，外壳弹提示，同意后 `commit_pending` 拿到真正的 TX 响应。
 
 ### compute_one（日常 FT8）
 
@@ -103,11 +104,12 @@ NA VHF 档见 [feature-na-vhf-processor.md](feature-na-vhf-processor.md)（交�
 | sticky ≤5 | 手动重试；RR73/73 不入槽 |
 | last_call | 自动选台粘滞 |
 | blacklist[64] | 自动发起（order≤2）的重试退避，按 TX 文本计数；见 [feature-auto-tx-backoff.md](feature-auto-tx-backoff.md) |
+| confirmed[256] + pending | 自动发起的操作员确认（首个 Tx2 须点头）；见 [feature-auto-tx2-confirm.md](feature-auto-tx2-confirm.md) |
 | peers[256] LRU | 按呼号攒 grid / 报告 / 时间 |
 
 ### Auto / Auto Mode
 
-外壳的旋钮映射到 `ftx_qso_context_t` 的 `auto_level` 和 `sel`（SNR / Dist / Rnd / Grid）。自动路径：`compute_one` 全表 → blacklist → 取 order 最大 → last_call → 按模式 tie-break。
+外壳的旋钮映射到 `ftx_qso_context_t` 的 `auto_level` 和 `sel`（SNR / Dist / Rnd / Grid）。自动路径：`compute_one` 全表 → blacklist → 取 order 最大 → last_call → 按模式 tie-break → 选中的若是未确认呼号的发起 Tx2，先停下等操作员点头（[feature-auto-tx2-confirm.md](feature-auto-tx2-confirm.md)）。
 
 autosel 值得单说一句。它的起源很现实：机内界面选台远不如电脑上 WSJT-X 用鼠标点得快，稍一迟疑就错过时机，只能等下一个同奇偶周期——而 6m 开窗往往转瞬即逝，一等，可能整个联系就错过了。自动选台就是来补这点手速的。
 

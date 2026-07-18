@@ -33,6 +33,7 @@
 | [architecture-overview.md](architecture-overview.md) | 分层、extension point、数据流 |
 | [architecture-stateless-qso.md](architecture-stateless-qso.md) | 无状态 QSO 引擎 |
 | [feature-auto-tx-backoff.md](feature-auto-tx-backoff.md) | 自动发起的重试退避（blacklist） |
+| [feature-auto-tx2-confirm.md](feature-auto-tx2-confirm.md) | 自动发起的操作员确认（TX2 confirm） |
 | [feature-na-vhf-processor.md](feature-na-vhf-processor.md) | NA VHF / Processor |
 | [feature-free-msg.md](feature-free-msg.md) | Free MSG |
 | [feature-auto-dnf.md](feature-auto-dnf.md) | Auto DNF |
