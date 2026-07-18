@@ -30,7 +30,7 @@ W9XYZ K1ABC 73          （可省）
 |----|------|
 | `ft8_lib`（必须匹配） | `R FN42` 编码；细节见 [companion-ft8lib.md](companion-ft8lib.md) |
 | 引擎 | `ftx_msg_type_t` 含 R-grid 档；`FTX_QSO_PROC_NA_VHF` 等 processor |
-| dialog | Page4 Processor 切换；NA VHF 下 `cq_rearm` 可带固定 modifier（如 `TEST`） |
+| dialog | Page4 Processor 切换；NA VHF 期间 CQ Modifier 走会话内存（默认 `TEST`，不写 params）；回 Normal / 关 dialog 后继续用持久化的 params |
 | 日志 | 竞赛 QSO 单独一张表；ADIF `adif_add_qso(..., comment)` 可带注释 |
 
 分发时如果只更新 gui 没更新 ft8lib 包，就会出现“Processor 里有 NA VHF、但空中发不出合法 R-grid”。

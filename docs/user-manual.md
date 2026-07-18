@@ -214,7 +214,7 @@ Auto Mode 的选择会记住；Auto 每次进 FT8 默认都是 Off，要手动�
 5. 叫满次数没人应，TX CQ 可能自动回 Off。
 6. 停叫：切回 Off。
 
-CQ Modifier（第 3 页）给 CQ 加后缀（如 `POTA`、竞赛相关）。NA VHF 下 Processor 也可能影响修饰，见第十一节。
+CQ Modifier（第 3 页）给 CQ 加后缀（如 `POTA`）。NA VHF 下临时用内存里的 `TEST`（可改，不落盘）；切回 Normal 或关 FT8 后仍是原来存在 params 里的值。
 
 ---
 
@@ -307,7 +307,7 @@ TX 尾对齐没有按钮：起步稍晚时可能裁掉波形前段来对齐结�
 
 1. Processor 切到 NA VHF（或机内显示的竞赛档）。
 2. 交换以呼号加网格（含 `R 网格`）为主，不是日常那种多步信号报告。
-3. CQ 可能带竞赛相关的修饰。
+3. 进入 NA VHF 时 CQ 使用会话内的 `TEST`（不改动已保存的 CQ Modifier）；赛中改 Modifier 只影响本次竞赛会话。切回 Normal 或关 FT8 后继续用原先保存的值。
 4. 赛后切回日常档，免得格式发错。
 
 赛规以主办方为准。

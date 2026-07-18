@@ -121,6 +121,10 @@ static bool     ui_confirm_pending = false;
 static bool     confirm_tx_odd     = false;
 static uint64_t confirm_deadline   = 0;
 
+/* NA VHF session CQ modifier: bypasses params (not persisted). Entering
+ * NA VHF resets to "TEST"; edits while in contest stay here only. */
+static char cq_mod_session[sizeof(params.ft8_cq_modifier.x)] = "TEST";
+
 #define DECODED_SLOT_MSG_MAX 100
 static ftx_decoded_msg_t decoded_slot_msgs[DECODED_SLOT_MSG_MAX];
 static char              decoded_slot_texts[DECODED_SLOT_MSG_MAX][64];
@@ -221,6 +225,8 @@ static void confirm_arm(const char *call, bool tx_odd, float tx_max_delay);
 static void confirm_accept(void);
 static void confirm_dismiss_cb(void *arg);
 static void confirm_dismiss_async(void);
+static bool processor_is_navhf(void);
+static const char *cq_mod_active(void);
 
 const char *auto_dnf_label_getter(void);
 static void auto_dnf_cb(struct button_data_t *btn_data);
@@ -865,16 +871,21 @@ static void hold_tx_freq_cb(struct button_data_t *btn_data) {
     ft8_set_hold_freq(!subject_get_int(cfg.ft8_hold_freq.val));
 }
 
+static bool processor_is_navhf(void) {
+    return qso_proc && (subject_get_int(qso_proc) == FTX_QSO_PROC_NA_VHF);
+}
+
+/* Active CQ modifier: session buffer in NA VHF, persisted params otherwise. */
+static const char *cq_mod_active(void) {
+    return processor_is_navhf() ? cq_mod_session : params.ft8_cq_modifier.x;
+}
+
 /* (Re)load the CQ text into tx_msg with a fresh repeats budget, aimed at
  * the parity held in cq_enabled. Called on CQ enable and whenever the
  * engine reply that displaced the CQ freed the TX slot again — a served
  * responder just proved propagation, so the countdown restarts. */
 static void cq_rearm(void) {
-    const char *mod = params.ft8_cq_modifier.x;
-    if (subject_get_int(qso_proc) == FTX_QSO_PROC_NA_VHF) {
-        mod = "TEST";
-    }
-    cq_make_message(params.callsign.x, params.qth.x, mod, tx_msg.msg);
+    cq_make_message(params.callsign.x, params.qth.x, cq_mod_active(), tx_msg.msg);
     tx_msg.repeats = subject_get_int(cfg.ft8_max_repeats.val);
     tx_msg.force_free_text = false;
     tx_msg_oneshot = false;
@@ -919,6 +930,12 @@ void ft8_set_auto_mode(ftx_qso_sel_t sel) {
 
 void ft8_set_processor(ftx_qso_proc_t proc) {
     if (disable_buttons) return;
+    ftx_qso_proc_t prev = (ftx_qso_proc_t)subject_get_int(qso_proc);
+    if ((prev != proc) && (proc == FTX_QSO_PROC_NA_VHF)) {
+        /* Fresh contest session modifier; never touches persisted params. */
+        strncpy(cq_mod_session, "TEST", sizeof(cq_mod_session) - 1);
+        cq_mod_session[sizeof(cq_mod_session) - 1] = '\0';
+    }
     subject_set_int(qso_proc, proc);
     qso_setting_changed();
 }
@@ -1133,8 +1150,8 @@ static void keyboard_open() {
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     );
 
-    if (strlen(params.ft8_cq_modifier.x) > 0) {
-        textarea_window_set(params.ft8_cq_modifier.x);
+    if (strlen(cq_mod_active()) > 0) {
+        textarea_window_set(cq_mod_active());
     } else {
         lv_obj_t *text = textarea_window_text();
         lv_textarea_set_placeholder_text(text, " CQ modifier");
@@ -1925,7 +1942,13 @@ void ft8_set_cq_modifier(const char *cq_mod) {
         ft8_remote_set_status("Unsupported CQ modifier");
         return;
     }
-    params_str_set(&params.ft8_cq_modifier, cq_mod);
+    /* NA VHF: session-only; Normal: persist to params. */
+    if (processor_is_navhf()) {
+        strncpy(cq_mod_session, cq_mod, sizeof(cq_mod_session) - 1);
+        cq_mod_session[sizeof(cq_mod_session) - 1] = '\0';
+    } else {
+        params_str_set(&params.ft8_cq_modifier, cq_mod);
+    }
 }
 
 void ft8_apply_free_msg(const char *text) {
@@ -2095,7 +2118,7 @@ const char *ft8_remote_band_label(void) {
 }
 
 const char *ft8_remote_cq_modifier(void) {
-    return params.ft8_cq_modifier.x;
+    return cq_mod_active();
 }
 
 const char *ft8_remote_next_tx(void) {

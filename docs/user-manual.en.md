@@ -214,7 +214,7 @@ Upstream only has on/off; this firmware uses Even/Odd for slot parity.
 5. After enough unanswered CQs, TX CQ may return to Off automatically.
 6. Stop calling: set back to Off.
 
-CQ Modifier (page 3) adds a CQ suffix (e.g. `POTA`, contest-related). Under NA VHF, Processor may also affect modifiers — see section 11.
+CQ Modifier (page 3) adds a CQ suffix (e.g. `POTA`). Under NA VHF a session-only `TEST` is used (editable, not written to params); switching back to Normal or closing FT8 keeps your saved params value.
 
 ---
 
@@ -307,7 +307,7 @@ Single-line numeric files under `/mnt/` (defaults are created if missing):
 
 1. Set Processor to NA VHF (or the contest profile shown on the radio).
 2. Exchange is mainly callsign + grid (including `R` + grid), not the usual multi-step signal reports.
-3. CQ may carry contest-related modifiers.
+3. Entering NA VHF uses a session-only `TEST` CQ modifier (does not change the saved CQ Modifier); edits during the contest apply only to that session. Switching back to Normal or closing FT8 keeps the previously saved value.
 4. After the contest, switch back to the everyday profile so you don’t send the wrong format.
 
 Contest rules are set by the organizer.
