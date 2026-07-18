@@ -57,6 +57,7 @@ struct PeerEntry {
     bool   has_rst_rcvd;
     int    rst_rcvd;
     time_t qso_start;
+    float  freq_hz; /* last heard tone-0 audio offset */
 };
 
 struct EngineState {
@@ -262,6 +263,7 @@ void peer_fill_record(const PeerEntry *peer, time_t end_time, ftx_qso_record_t *
     rec->rst_rcvd   = peer->rst_rcvd;
     rec->start_time = peer->qso_start ? peer->qso_start : end_time;
     rec->end_time   = end_time;
+    rec->freq_hz    = peer->freq_hz;
 }
 
 /* Try to log the QSO with `peer`; on success fills response->qso and
@@ -297,6 +299,9 @@ void analyze_rx(const ftx_qso_context_t *ctx,
         if (ieq(meta.call_de, ctx->local_callsign)) continue;
 
         PeerEntry *peer = peer_get(meta.call_de);
+        if (msgs[i].freq_hz > 0.0f) {
+            peer->freq_hz = msgs[i].freq_hz;
+        }
         if (meta.grid[0] != '\0') {
             copy_str(peer->grid, sizeof(peer->grid), meta.grid);
         }
@@ -348,6 +353,9 @@ void emit_candidate(const ftx_qso_context_t *ctx,
     /* The click entry point bypasses analyze_rx: keep the grid fresh here too. */
     if (cand->grid[0] != '\0') {
         copy_str(peer->grid, sizeof(peer->grid), cand->grid);
+    }
+    if (cand->freq_hz > 0.0f) {
+        peer->freq_hz = cand->freq_hz;
     }
 
     if (!sticky && ((cand->type == FTX_MSG_TYPE_CQ) || (cand->type == FTX_MSG_TYPE_GRID))) {

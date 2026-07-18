@@ -1248,12 +1248,18 @@ static ftx_qso_context_t qso_context(void) {
  * no UI. Safe from both the LVGL and the audio worker threads. */
 static void save_qso_record_db(const ftx_qso_record_t *rec) {
     char *canonized_call = util_canonize_callsign(rec->call, false);
+    uint64_t dial_hz = (uint64_t)subject_get_int(cfg_cur.fg_freq);
+    uint64_t freq_hz = dial_hz;
+    /* ADIF FREQ = dial + RX audio offset (tone-0 base), same idea as ft8d. */
+    if (rec->freq_hz > 0.0f) {
+        freq_hz = dial_hz + (uint64_t)llroundf(rec->freq_hz);
+    }
     qso_log_record_t qso = qso_log_record_create(
         params.callsign.x,
         canonized_call,
         rec->end_time,
         subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8 ? MODE_FT8 : MODE_FT4,
-        rec->rst_sent, rec->rst_rcvd, subject_get_int(cfg_cur.fg_freq), NULL, NULL,
+        rec->rst_sent, rec->rst_rcvd, freq_hz, NULL, NULL,
         params.qth.x, rec->grid
     );
     free(canonized_call);

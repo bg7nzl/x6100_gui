@@ -10,6 +10,7 @@
 
 #include <ctype.h>
 #include <fcntl.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +33,12 @@ static uint64_t            s_last_publish;
 static bool                s_force_publish;
 static char                s_free_msg[16];
 static char                s_status[64];
+static uint8_t             s_autodnf_valid;
+static uint8_t             s_autodnf_applied;
+static uint16_t            s_autodnf_center_hz;
+static uint16_t            s_autodnf_half_width_hz;
+static int16_t             s_autodnf_delta_db;
+static uint32_t            s_autodnf_time_utc;
 
 static void to_upper_token(char *s) {
     for (; *s; ++s) {
@@ -74,6 +81,13 @@ static void publish(void) {
 
     strncpy(s_state->status, s_status, sizeof(s_state->status) - 1);
     strncpy(s_state->free_msg, s_free_msg, sizeof(s_state->free_msg) - 1);
+
+    s_state->autodnf_valid         = s_autodnf_valid;
+    s_state->autodnf_applied       = s_autodnf_applied;
+    s_state->autodnf_center_hz     = s_autodnf_center_hz;
+    s_state->autodnf_half_width_hz = s_autodnf_half_width_hz;
+    s_state->autodnf_delta_db      = s_autodnf_delta_db;
+    s_state->autodnf_time_utc      = s_autodnf_time_utc;
 
     if (!ft8_remote_active()) {
         s_state->active = 0;
@@ -179,6 +193,22 @@ void ft8_remote_note_free_msg(const char *text) {
     }
     strncpy(s_free_msg, text, sizeof(s_free_msg) - 1);
     s_free_msg[sizeof(s_free_msg) - 1] = '\0';
+}
+
+void ft8_remote_note_autodnf(uint32_t time_utc, uint16_t center_hz,
+                             uint16_t half_width_hz, float delta_db,
+                             bool applied) {
+    if (delta_db < -32768.0f) {
+        delta_db = -32768.0f;
+    } else if (delta_db > 32767.0f) {
+        delta_db = 32767.0f;
+    }
+    s_autodnf_valid         = 1;
+    s_autodnf_applied       = applied ? 1 : 0;
+    s_autodnf_center_hz     = center_hz;
+    s_autodnf_half_width_hz = half_width_hz;
+    s_autodnf_delta_db      = (int16_t)lroundf(delta_db);
+    s_autodnf_time_utc      = time_utc;
 }
 
 void ft8_remote_request_publish(void) {

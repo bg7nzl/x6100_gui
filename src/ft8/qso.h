@@ -114,6 +114,8 @@ typedef struct {
     int    rst_rcvd;
     time_t start_time;
     time_t end_time;
+    /* Peer audio offset (ft8lib tone-0 base Hz); 0 if unknown. */
+    float  freq_hz;
 } ftx_qso_record_t;
 
 /* Engine output for exactly one upcoming slot. The caller transmits tx_msg

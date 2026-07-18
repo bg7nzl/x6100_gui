@@ -255,8 +255,8 @@ static void write_date_time(FILE *fd, time_t time) {
 }
 
 static void write_freq(FILE *fd, float freq_mhz) {
-    char str_freq[8];
-    sprintf(str_freq, "%0.4f", freq_mhz);
+    char str_freq[16];
+    snprintf(str_freq, sizeof(str_freq), "%0.6f", freq_mhz);
     write_str(fd, "FREQ", str_freq);
 }
 

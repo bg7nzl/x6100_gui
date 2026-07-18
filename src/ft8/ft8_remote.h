@@ -18,7 +18,7 @@ extern "C" {
 
 #define FT8_REMOTE_SHM_PATH   "/dev/shm/x6100_ft8_state"
 #define FT8_REMOTE_MAGIC      0x46543852u   /* 'F''T''8''R' */
-#define FT8_REMOTE_VERSION    2
+#define FT8_REMOTE_VERSION    3
 #define FT8_REMOTE_MAX_ROWS   512
 
 typedef struct {
@@ -71,6 +71,15 @@ typedef struct {
     char     de_grid[8];
     char     status[64];
 
+    /* Last autodnf cycle result (written when notch closes, or immediately
+     * when a peak was detected but DNF was not applied). */
+    uint8_t  autodnf_valid;
+    uint8_t  autodnf_applied;
+    uint16_t autodnf_center_hz;
+    uint16_t autodnf_half_width_hz;
+    int16_t  autodnf_delta_db;
+    uint32_t autodnf_time_utc; /* wall clock at close; web floors to slot */
+
     uint16_t row_count;
     uint16_t row_capacity;
     ft8_remote_row_t rows[FT8_REMOTE_MAX_ROWS];
@@ -85,6 +94,9 @@ void ft8_remote_on_cleanup(void);
 
 void ft8_remote_set_status(const char *text);
 void ft8_remote_note_free_msg(const char *text);
+void ft8_remote_note_autodnf(uint32_t time_utc, uint16_t center_hz,
+                             uint16_t half_width_hz, float delta_db,
+                             bool applied);
 void ft8_remote_request_publish(void);
 
 #ifdef __cplusplus

@@ -172,7 +172,8 @@ size_t table_view_snapshot(ft8_remote_row_t *out, size_t max) {
         if (!cd) {
             continue;
         }
-        if (cd->cell_type == CELL_RX_INFO || cd->cell_type == CELL_TX_INFO) {
+        if (cd->cell_type == CELL_RX_INFO || cd->cell_type == CELL_TX_INFO ||
+            cd->cell_type == CELL_START_QSO) {
             continue;
         }
         msg_rows[nmsg++] = r;

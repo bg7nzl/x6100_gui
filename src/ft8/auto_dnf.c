@@ -8,6 +8,7 @@
 
 #include "auto_dnf.h"
 #include "ft8_log.h"
+#include "ft8_remote.h"
 
 #include <math.h>
 #include <pthread.h>
@@ -82,6 +83,14 @@ struct auto_dnf_ctx_s {
 
     /* Scratch for percentile sort, sized once in create(). */
     float       floor_samples[FLOOR_SAMPLES_MAX];
+
+    /* Pending remote publish: filled on detect, flushed when notch closes
+     * (or immediately if DNF was not applied). */
+    bool        remote_pending;
+    bool        remote_applied;
+    uint16_t    remote_center_hz;
+    uint16_t    remote_half_width_hz;
+    float       remote_delta_db;
 };
 
 /* ---------- overlay ---------------------------------------------------- */
@@ -232,6 +241,19 @@ static void clear_timer_arm(auto_dnf_ctx_t *ctx) {
     lv_timer_set_repeat_count(ctx->clear_timer, 1);
 }
 
+static void remote_publish_pending(auto_dnf_ctx_t *ctx) {
+    if (!ctx || !ctx->remote_pending) {
+        return;
+    }
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    ft8_remote_note_autodnf((uint32_t)now.tv_sec, ctx->remote_center_hz,
+                            ctx->remote_half_width_hz, ctx->remote_delta_db,
+                            ctx->remote_applied);
+    ft8_remote_request_publish();
+    ctx->remote_pending = false;
+}
+
 static void apply_cb(void *arg) {
     auto_dnf_ctx_t *ctx = g_self;
     if (!ctx) return;
@@ -244,9 +266,25 @@ static void apply_cb(void *arg) {
      * don't apply the notch. */
     overlay_show(ctx, m->center_hz, m->half_width_hz, m->delta_db, false);
 
-    if (!subject_get_int(cfg.ft8_auto_dnf.val)) return;
-    if (subject_get_int(cfg.dnf_auto.val))      return;
-    if (!m->apply_dnf)                          return;
+    ctx->remote_pending        = true;
+    ctx->remote_applied        = false;
+    ctx->remote_center_hz      = m->center_hz;
+    ctx->remote_half_width_hz  = m->half_width_hz;
+    ctx->remote_delta_db       = m->delta_db;
+
+    if (!subject_get_int(cfg.ft8_auto_dnf.val)) {
+        remote_publish_pending(ctx);
+        return;
+    }
+    if (subject_get_int(cfg.dnf_auto.val)) {
+        remote_publish_pending(ctx);
+        return;
+    }
+    if (!m->apply_dnf) {
+        /* No notch to close later — publish detection result now (blue). */
+        remote_publish_pending(ctx);
+        return;
+    }
 
     if (!ctx->override_active && !ctx->entry.valid) {
         /* entry snapshot not taken (create() without snapshot) - fall back
@@ -258,6 +296,7 @@ static void apply_cb(void *arg) {
     }
     ctx->override_active = true;
     ctx->active_slot_start = m->slot_start;
+    ctx->remote_applied = true;
 
     subject_set_int(cfg.dnf.val,        true);
     subject_set_int(cfg.dnf_center.val, m->center_hz);
@@ -281,6 +320,8 @@ static void do_restore_now(auto_dnf_ctx_t *ctx) {
         if (cur_center != ctx->entry.center) subject_set_int(cfg.dnf_center.val, ctx->entry.center);
         if (cur_width  != ctx->entry.width)  subject_set_int(cfg.dnf_width.val,  ctx->entry.width);
     }
+    /* Notch closing (or TX clear) — flush pending red detection to shm. */
+    remote_publish_pending(ctx);
     ctx->override_active = false;
     ctx->active_slot_start = 0;
     overlay_hide(ctx);
@@ -493,6 +534,7 @@ void auto_dnf_restore_entry(auto_dnf_ctx_t *ctx) {
     if (cur_center != ctx->entry.center) subject_set_int(cfg.dnf_center.val, ctx->entry.center);
     if (cur_width  != ctx->entry.width)  subject_set_int(cfg.dnf_width.val,  ctx->entry.width);
 
+    remote_publish_pending(ctx);
     ctx->override_active   = false;
     ctx->active_slot_start = 0;
     overlay_hide(ctx);
