@@ -50,6 +50,23 @@ static void slot(const ftx_qso_context_t *ctx,
     ftx_qso_on_decoded_messages(ctx, buf, n, rx_odd, response);
 }
 
+/* Auto TX2 initiation needs an operator confirm; commit so tests that
+ * assert the post-confirm TX path keep working. */
+static void confirm_if_needed(const ftx_qso_context_t *ctx,
+                              ftx_qso_response_t *response) {
+    if (response->need_confirm) {
+        REQUIRE(ftx_qso_commit_pending(ctx, response));
+    }
+}
+
+static void slot_auto(const ftx_qso_context_t *ctx,
+                      std::initializer_list<ftx_decoded_msg_t> msgs,
+                      ftx_qso_response_t *response,
+                      bool rx_odd = true) {
+    slot(ctx, msgs, response, rx_odd);
+    confirm_if_needed(ctx, response);
+}
+
 TEST_CASE("Split text", "[ft8_qso]") {
     auto tokens = split_text(" CQ   EA0DX123 ");
     REQUIRE(tokens.size() == 2);
@@ -276,8 +293,8 @@ TEST_CASE("Auto mode SNR", "[ft8_qso]") {
     ftx_qso_response_t response;
 
     SECTION("Louder CQ wins") {
-        slot(&ctx, {make_msg("CQ EA0DX KO12", -12, 800.0f),
-                    make_msg("CQ VK5COL PF84", 3, 1500.0f)}, &response);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", -12, 800.0f),
+                         make_msg("CQ VK5COL PF84", 3, 1500.0f)}, &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
         REQUIRE_THAT(response.tx_msg, Equals("VK5COL R2RFE LO02"));
         REQUIRE(response.freq_hz == 1500.0f);
@@ -291,23 +308,23 @@ TEST_CASE("Auto mode SNR", "[ft8_qso]") {
     }
 
     SECTION("last_call keeps the QSO from wandering") {
-        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
         REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
         /* Next slot: EA0DX repeats CQ; a louder station also calls CQ. */
-        slot(&ctx, {make_msg("CQ EA0DX KO12", 5),
-                    make_msg("CQ VK5COL PF84", 20)}, &response);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5),
+                         make_msg("CQ VK5COL PF84", 20)}, &response);
         REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
     }
 
     SECTION("CQ reply soft-blocks after three sends") {
         for (int i = 0; i < 3; i++) {
-            slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+            slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
             REQUIRE(response.action == FTX_QSO_ACTION_TX);
         }
         /* Decaying pass after soft cap — both outcomes must appear. */
         int tx = 0, rx = 0;
         for (int i = 0; i < 200; i++) {
-            slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+            slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
             if (response.action == FTX_QSO_ACTION_TX) tx++;
             else rx++;
         }
@@ -318,12 +335,12 @@ TEST_CASE("Auto mode SNR", "[ft8_qso]") {
     SECTION("CQ reply hard-stops after ten sends") {
         int tx = 0;
         for (int i = 0; i < 500 && tx < 10; i++) {
-            slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+            slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
             if (response.action == FTX_QSO_ACTION_TX) tx++;
         }
         REQUIRE(tx == 10);
         for (int i = 0; i < 40; i++) {
-            slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+            slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
             REQUIRE(response.action == FTX_QSO_ACTION_RX);
         }
     }
@@ -345,14 +362,14 @@ TEST_CASE("Auto mode SNR", "[ft8_qso]") {
 
     SECTION("Tail-end soft-blocks after three sends") {
         for (int i = 0; i < 3; i++) {
-            slot(&ctx, {make_msg("JA1XYZ EA0DX RR73", 5)}, &response);
+            slot_auto(&ctx, {make_msg("JA1XYZ EA0DX RR73", 5)}, &response);
             REQUIRE(response.action == FTX_QSO_ACTION_TX);
             REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
         }
         /* Decaying pass after soft cap — both outcomes must appear. */
         int tx = 0, rx = 0;
         for (int i = 0; i < 200; i++) {
-            slot(&ctx, {make_msg("JA1XYZ EA0DX RR73", 5)}, &response);
+            slot_auto(&ctx, {make_msg("JA1XYZ EA0DX RR73", 5)}, &response);
             if (response.action == FTX_QSO_ACTION_TX) {
                 tx++;
                 REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
@@ -371,15 +388,15 @@ TEST_CASE("Auto mode distance", "[ft8_qso]") {
 
     SECTION("Farther grid wins over louder signal") {
         /* KO85 (Moscow area) is near LO02; PF84 (Australia) is far. */
-        slot(&ctx, {make_msg("CQ UA3XYZ KO85", 20),
-                    make_msg("CQ VK5COL PF84", -20)}, &response);
+        slot_auto(&ctx, {make_msg("CQ UA3XYZ KO85", 20),
+                         make_msg("CQ VK5COL PF84", -20)}, &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
         REQUIRE_THAT(response.tx_msg, Equals("VK5COL R2RFE LO02"));
     }
 
     SECTION("No grid data falls back to SNR") {
-        slot(&ctx, {make_msg("CQ UA3XYZ", -3),
-                    make_msg("CQ VK5COL", 10)}, &response);
+        slot_auto(&ctx, {make_msg("CQ UA3XYZ", -3),
+                         make_msg("CQ VK5COL", 10)}, &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
         REQUIRE_THAT(response.tx_msg, Equals("VK5COL R2RFE LO02"));
     }
@@ -395,8 +412,8 @@ TEST_CASE("Auto modes never initiate with a worked station", "[ft8_qso]") {
     }
 
     SECTION("Unworked CQ beats a louder worked one") {
-        slot(&ctx, {make_msg("CQ EA0DX KO12", 20, 0.0f, true, true),
-                    make_msg("CQ VK5COL PF84", -10)}, &response);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 20, 0.0f, true, true),
+                         make_msg("CQ VK5COL PF84", -10)}, &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
         REQUIRE_THAT(response.tx_msg, Equals("VK5COL R2RFE LO02"));
     }
@@ -418,25 +435,25 @@ TEST_CASE("Auto mode new grid", "[ft8_qso]") {
     ftx_qso_response_t response;
 
     SECTION("A new grid beats a louder worked grid") {
-        slot(&ctx, {make_msg("CQ EA0DX KO12", 20, 0.0f, true, false, true),
-                    make_msg("CQ VK5COL PF84", -20, 0.0f, true, false, false)},
-             &response);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 20, 0.0f, true, false, true),
+                         make_msg("CQ VK5COL PF84", -20, 0.0f, true, false, false)},
+                  &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
         REQUIRE_THAT(response.tx_msg, Equals("VK5COL R2RFE LO02"));
     }
 
     SECTION("Two new grids: the louder one wins") {
-        slot(&ctx, {make_msg("CQ EA0DX KO12", -7, 0.0f, true, false, false),
-                    make_msg("CQ VK5COL PF84", 6, 0.0f, true, false, false)},
-             &response);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", -7, 0.0f, true, false, false),
+                         make_msg("CQ VK5COL PF84", 6, 0.0f, true, false, false)},
+                  &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
         REQUIRE_THAT(response.tx_msg, Equals("VK5COL R2RFE LO02"));
     }
 
     SECTION("All grids worked: preference degrades to an SNR pick") {
-        slot(&ctx, {make_msg("CQ EA0DX KO12", 5, 0.0f, true, false, true),
-                    make_msg("CQ VK5COL PF84", -2, 0.0f, true, false, true)},
-             &response);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5, 0.0f, true, false, true),
+                         make_msg("CQ VK5COL PF84", -2, 0.0f, true, false, true)},
+                  &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
         REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
     }
@@ -454,8 +471,8 @@ TEST_CASE("Auto mode random picks a valid candidate", "[ft8_qso]") {
     ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_PRE, FTX_QSO_SEL_RANDOM);
     ftx_qso_response_t response;
 
-    slot(&ctx, {make_msg("CQ EA0DX KO12", 5),
-                make_msg("CQ VK5COL PF84", 5)}, &response);
+    slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5),
+                     make_msg("CQ VK5COL PF84", 5)}, &response);
     REQUIRE(response.action == FTX_QSO_ACTION_TX);
     bool ok = (strcmp(response.tx_msg, "EA0DX R2RFE LO02") == 0) ||
               (strcmp(response.tx_msg, "VK5COL R2RFE LO02") == 0);
@@ -631,7 +648,7 @@ TEST_CASE("QSO logging in auto mode", "[ft8_qso]") {
     ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_PRE);
     ftx_qso_response_t response;
 
-    slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+    slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
     REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
 
     slot(&ctx, {make_msg("R2RFE EA0DX -08", 4)}, &response);
@@ -736,7 +753,7 @@ TEST_CASE("Full level answers CQ but never tail-ends", "[ft8_qso]") {
     }
 
     SECTION("A CQ is still answered") {
-        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
         REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
     }
@@ -748,12 +765,12 @@ TEST_CASE("Clear decision state resets the auto blacklist", "[ft8_qso]") {
 
     /* Initiating reply (order ≤ 2): three guaranteed sends, then soft-cap. */
     for (int i = 0; i < 3; i++) {
-        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
     }
     bool saw_rx = false;
     for (int i = 0; i < 100; i++) {
-        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
         if (response.action == FTX_QSO_ACTION_RX) {
             saw_rx = true;
             break;
@@ -762,7 +779,8 @@ TEST_CASE("Clear decision state resets the auto blacklist", "[ft8_qso]") {
     REQUIRE(saw_rx);
 
     ftx_qso_clear_decision_state();
-    slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+    /* Confirmed set survives: no re-prompt, direct TX after blacklist clear. */
+    slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
     REQUIRE(response.action == FTX_QSO_ACTION_TX);
 }
 
@@ -772,13 +790,13 @@ TEST_CASE("NA VHF: answer all CQs with grid reply", "[ft8_qso]") {
     ftx_qso_response_t response;
 
     SECTION("CQ without TEST") {
-        slot(&ctx, {make_msg("CQ K1ABC FN42", 5)}, &response);
+        slot_auto(&ctx, {make_msg("CQ K1ABC FN42", 5)}, &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
         REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE LO02"));
     }
 
     SECTION("CQ TEST yields the same reply text") {
-        slot(&ctx, {make_msg("CQ TEST K1ABC FN42", 5)}, &response);
+        slot_auto(&ctx, {make_msg("CQ TEST K1ABC FN42", 5)}, &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
         REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE LO02"));
     }
@@ -860,7 +878,7 @@ TEST_CASE("NA VHF: tail-end follows Auto level", "[ft8_qso]") {
     SECTION("Pre still tail-ends") {
         ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_PRE, FTX_QSO_SEL_SNR,
                                          FTX_QSO_PROC_NA_VHF);
-        slot(&ctx, {make_msg("JA1XYZ K1ABC RR73", 5)}, &response);
+        slot_auto(&ctx, {make_msg("JA1XYZ K1ABC RR73", 5)}, &response);
         REQUIRE(response.action == FTX_QSO_ACTION_TX);
         REQUIRE_THAT(response.tx_msg, Equals("K1ABC R2RFE LO02"));
     }
@@ -918,4 +936,179 @@ TEST_CASE("NA VHF: sticky and /R rover callsign", "[ft8_qso]") {
     REQUIRE(response.save);
     REQUIRE_THAT(response.qso.call, Equals("K1ABC/R"));
     REQUIRE_THAT(response.qso.grid, Equals("FN42"));
+}
+
+TEST_CASE("Auto TX2 confirm gate", "[ft8_qso]") {
+    ftx_qso_response_t response;
+
+    SECTION("Full + unconfirmed CQ needs confirm, no blacklist burn") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_FULL);
+        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_RX);
+        REQUIRE(response.need_confirm);
+        REQUIRE_THAT(response.confirm_call, Equals("EA0DX"));
+        REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
+        REQUIRE(ftx_qso_pending_active());
+
+        /* Abort leaves blacklist untouched: many more prompts still fire. */
+        ftx_qso_abort_pending();
+        REQUIRE(!ftx_qso_pending_active());
+        for (int i = 0; i < 5; i++) {
+            slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+            REQUIRE(response.need_confirm);
+            ftx_qso_abort_pending();
+        }
+    }
+
+    SECTION("commit_pending emits TX2 and remembers the call") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_FULL);
+        slot(&ctx, {make_msg("CQ EA0DX KO12", 5, 1200.0f)}, &response);
+        REQUIRE(response.need_confirm);
+
+        REQUIRE(ftx_qso_commit_pending(&ctx, &response));
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE(!response.need_confirm);
+        REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
+        REQUIRE(response.freq_hz == 1200.0f);
+        REQUIRE(!ftx_qso_pending_active());
+
+        /* Same call again: direct TX, no re-prompt. */
+        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE(!response.need_confirm);
+    }
+
+    SECTION("abort then decide still needs confirm") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_FULL);
+        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        REQUIRE(response.need_confirm);
+        ftx_qso_abort_pending();
+        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        REQUIRE(response.need_confirm);
+        REQUIRE(response.action == FTX_QSO_ACTION_RX);
+    }
+
+    SECTION("Pre tail-end also gates on TX2 text, not order") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_PRE);
+        slot(&ctx, {make_msg("JA1XYZ EA0DX RR73", 5)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_RX);
+        REQUIRE(response.need_confirm);
+        REQUIRE_THAT(response.confirm_call, Equals("EA0DX"));
+        REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE LO02"));
+    }
+
+    SECTION("Confirmed call retries go through blacklist soft path") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_FULL);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        for (int i = 0; i < 2; i++) {
+            slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+            REQUIRE(response.action == FTX_QSO_ACTION_TX);
+            REQUIRE(!response.need_confirm);
+        }
+        /* Soft-cap: both TX and RX must appear; never need_confirm. */
+        int tx = 0, rx = 0;
+        for (int i = 0; i < 200; i++) {
+            slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+            REQUIRE(!response.need_confirm);
+            if (response.action == FTX_QSO_ACTION_TX) tx++;
+            else rx++;
+        }
+        REQUIRE(tx > 0);
+        REQUIRE(rx > 0);
+    }
+
+    SECTION("Res never initiates, so no confirm") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_RES);
+        slot(&ctx, {make_msg("CQ EA0DX KO12", 20)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_RX);
+        REQUIRE(!response.need_confirm);
+        REQUIRE(!ftx_qso_pending_active());
+    }
+
+    SECTION("Manual click TX2 skips gate and seeds confirmed set") {
+        ftx_qso_context_t ctx = test_ctx();
+        ftx_qso_on_user_message(&ctx, "CQ EA0DX KO12", 9, 0.0f, true, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE(!response.need_confirm);
+
+        /* Switch to Full: same call must not re-prompt. */
+        ftx_qso_clear_decision_state();
+        ctx.auto_level = FTX_QSO_AUTO_FULL;
+        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE(!response.need_confirm);
+    }
+
+    SECTION("Non-TX2 replies never need confirm") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_FULL);
+        /* Report / R-report / RR73 / 73 / R-grid are not TX2. */
+        slot(&ctx, {make_msg("R2RFE EA0DX -08", 4)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE(!response.need_confirm);
+        REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE R+04"));
+
+        slot(&ctx, {make_msg("R2RFE EA0DX R-05", 4)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE(!response.need_confirm);
+        REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE RR73"));
+    }
+
+    SECTION("clear_decision_state drops pending, keeps confirmed") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_FULL);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+
+        slot(&ctx, {make_msg("CQ VK5COL PF84", 5)}, &response);
+        REQUIRE(response.need_confirm);
+        REQUIRE(ftx_qso_pending_active());
+
+        ftx_qso_clear_decision_state();
+        REQUIRE(!ftx_qso_pending_active());
+
+        /* EA0DX still confirmed; VK5COL not. */
+        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+        REQUIRE(!response.need_confirm);
+
+        slot(&ctx, {make_msg("CQ VK5COL PF84", 5)}, &response);
+        REQUIRE(response.need_confirm);
+    }
+
+    SECTION("reset clears confirmed and pending") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_FULL);
+        slot_auto(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        REQUIRE(response.action == FTX_QSO_ACTION_TX);
+
+        ftx_qso_reset();
+        ctx = test_ctx(FTX_QSO_AUTO_FULL); /* reset again via helper; re-arm ctx */
+        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        REQUIRE(response.need_confirm);
+    }
+
+    SECTION("decide() invalidates a leftover pending") {
+        ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_FULL);
+        slot(&ctx, {make_msg("CQ EA0DX KO12", 5)}, &response);
+        REQUIRE(response.need_confirm);
+        REQUIRE(ftx_qso_pending_active());
+
+        /* New decision without abort/commit: old pending must die. */
+        slot(&ctx, {make_msg("CQ VK5COL PF84", 5)}, &response);
+        REQUIRE(response.need_confirm);
+        REQUIRE_THAT(response.confirm_call, Equals("VK5COL"));
+        REQUIRE(ftx_qso_commit_pending(&ctx, &response));
+        REQUIRE_THAT(response.tx_msg, Equals("VK5COL R2RFE LO02"));
+    }
+}
+
+/* RR73 passes qth_grid_check; gate must still refuse to treat Tx5 as TX2. */
+TEST_CASE("TX2 detector rejects RR73 collision", "[ft8_qso]") {
+    ftx_qso_context_t ctx = test_ctx(FTX_QSO_AUTO_FULL);
+    ftx_qso_response_t response;
+
+    /* Drive a real QSO to the RR73 reply (order 5): must TX, not confirm. */
+    slot(&ctx, {make_msg("R2RFE EA0DX R-05", 4)}, &response);
+    REQUIRE(response.action == FTX_QSO_ACTION_TX);
+    REQUIRE(!response.need_confirm);
+    REQUIRE_THAT(response.tx_msg, Equals("EA0DX R2RFE RR73"));
 }

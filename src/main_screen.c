@@ -659,6 +659,11 @@ static void main_screen_keypad_cb(lv_event_t * e) {
             break;
 
         case KEYPAD_PTT:
+            /* FT8 dialog owns PTT: swallow always; pending confirm accepts
+             * on PRESS. Outside FT8, keep radio keying. */
+            if (ft8_consume_ptt(keypad->state)) {
+                break;
+            }
             switch (keypad->state) {
                 case KEYPAD_PRESS:
                     radio_set_ptt(true);
@@ -841,6 +846,11 @@ static void freq_shift(int16_t diff) {
 
 static void main_screen_rotary_cb(lv_event_t * e) {
     int32_t *diff = (int32_t *) lv_event_get_param(e);
+
+    if (ft8_confirm_consume_rotary()) {
+        free(diff);
+        return;
+    }
 
     freq_shift(*diff);
     dialog_rotary(*diff);

@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "dialog.h"
+#include "events.h"
 #include "ft8/qso.h"
 
 #include <ft8lib/message.h>
@@ -48,6 +49,14 @@ void ft8_time_sync(void);
 void ft8_remote_click(uint32_t row_id);
 void ft8_set_tx_delta(int hz);
 void ft8_band(int dir);
+
+/* FT8 dialog open → always true (swallow PTT / no radio_set_ptt).
+ * When a TX2 confirm is armed, KEYPAD_PRESS also accepts it. */
+bool ft8_consume_ptt(keypad_state_t state);
+
+/* Pending TX2 confirm + dialog open → accept confirm and swallow this
+ * VFO step (no freq_shift). Otherwise false. */
+bool ft8_confirm_consume_rotary(void);
 
 /* State getters for shm publish (main thread). */
 bool        ft8_remote_active(void);

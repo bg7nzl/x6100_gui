@@ -44,6 +44,18 @@ struct BlacklistEntry {
     int  count;
 };
 
+/* One reply candidate; `order` is the ft8d QSO progress (bigger = deeper). */
+struct Candidate {
+    int            order;
+    ftx_msg_type_t type;
+    char           call[13];
+    char           grid[9];
+    char           text[35];
+    int            snr;
+    float          freq_hz;
+    bool           grid_worked;
+};
+
 /* Per-callsign QSO bookkeeping (shared by manual and auto modes).
  * grid survives a save; the rest is cleared once the QSO is logged.
  * rst_sent can only be (re)armed by us actually transmitting a report,
@@ -77,6 +89,19 @@ struct EngineState {
     int            blacklist_len;
     int            blacklist_next;
 
+    /* Session-scoped calls whose first auto TX2 the operator already
+     * approved (or armed via a manual click). Ring buffer; oldest evicted
+     * when full. Survives clear_decision_state; cleared by reset. */
+    char confirmed_calls[256][13];
+    int  confirmed_len;
+    int  confirmed_next;
+
+    /* Auto TX2 waiting for operator confirm. Cleared by commit, abort,
+     * clear_decision_state, reset, or the next decide() entry. */
+    bool      pending_valid;
+    bool      pending_tx_odd;
+    Candidate pending_cand;
+
     /* QSO logging. LRU: front = most recently touched, the tail entry is
      * evicted when full (a busy band can bring 60+ decodes per slot, so an
      * active QSO must not be flushed out by a flood of one-shot CQs). */
@@ -85,18 +110,6 @@ struct EngineState {
 };
 
 EngineState g_state;
-
-/* One reply candidate; `order` is the ft8d QSO progress (bigger = deeper). */
-struct Candidate {
-    int            order;
-    ftx_msg_type_t type;
-    char           call[13];
-    char           grid[9];
-    char           text[35];
-    int            snr;
-    float          freq_hz;
-    bool           grid_worked;
-};
 
 /* ---------- small helpers ---------------------------------------------- */
 
@@ -138,6 +151,59 @@ void init_response(bool rx_odd, ftx_qso_response_t *response) {
     if (!response) return;
     std::memset(response, 0, sizeof(*response));
     response->tx_odd = !rx_odd;
+    response->need_confirm = false;
+    response->confirm_call[0] = '\0';
+}
+
+/* True when `text` is WSJT-X Tx2 shape: PEER MYCALL GRID4.
+ * RR73 must be excluded explicitly: qth_grid_check("RR73") is true. */
+bool is_tx2_text(const char *text, const char *local_callsign) {
+    if (!text || !local_callsign || local_callsign[0] == '\0') return false;
+    std::vector<std::string> tokens = split_text(text);
+    if (tokens.size() != 3) return false;
+    if (!ieq_str(tokens[1], local_callsign)) return false;
+    if (ieq_str(tokens[2], "RR73") || ieq_str(tokens[2], "RRR")) return false;
+    return qth_grid_check(tokens[2].c_str());
+}
+
+bool confirmed_contains(const char *call) {
+    if (!call || call[0] == '\0') return false;
+    for (int i = 0; i < g_state.confirmed_len; i++) {
+        if (ieq(g_state.confirmed_calls[i], call)) return true;
+    }
+    return false;
+}
+
+void confirmed_insert(const char *call) {
+    if (!call || call[0] == '\0') return;
+    if (confirmed_contains(call)) return;
+    int cap = (int)(sizeof(g_state.confirmed_calls) / sizeof(g_state.confirmed_calls[0]));
+    char *slot;
+    if (g_state.confirmed_len < cap) {
+        slot = g_state.confirmed_calls[g_state.confirmed_len++];
+    } else {
+        slot = g_state.confirmed_calls[g_state.confirmed_next];
+        g_state.confirmed_next = (g_state.confirmed_next + 1) % cap;
+    }
+    copy_str(slot, 13, call);
+}
+
+void pending_clear(void) {
+    g_state.pending_valid = false;
+    g_state.pending_tx_odd = false;
+    std::memset(&g_state.pending_cand, 0, sizeof(g_state.pending_cand));
+}
+
+void stash_pending(const Candidate *cand, bool tx_odd, ftx_qso_response_t *response) {
+    g_state.pending_valid  = true;
+    g_state.pending_tx_odd = tx_odd;
+    g_state.pending_cand   = *cand;
+
+    response->need_confirm = true;
+    copy_str(response->confirm_call, sizeof(response->confirm_call), cand->call);
+    /* Convenience for UI: show what would go out; action stays RX. */
+    copy_str(response->tx_msg, sizeof(response->tx_msg), cand->text);
+    response->freq_hz = cand->freq_hz;
 }
 
 std::string local_qth4(const ftx_qso_context_t *ctx) {
@@ -711,6 +777,13 @@ void auto_decide(const ftx_qso_context_t *ctx,
     }
 
     if (cands[pick].order <= 2) {
+        /* First auto TX2 for this call needs operator confirm: stash and
+         * leave action=RX. Do not bump blacklist / last_call / emit yet. */
+        if (is_tx2_text(cands[pick].text, ctx->local_callsign) &&
+            !confirmed_contains(cands[pick].call)) {
+            stash_pending(&cands[pick], response->tx_odd, response);
+            return;
+        }
         blacklist_bump(cands[pick].text);
     }
     copy_str(g_state.last_call, sizeof(g_state.last_call), cands[pick].call);
@@ -722,6 +795,8 @@ void decide(const ftx_qso_context_t *ctx,
             size_t msg_count,
             bool rx_odd,
             ftx_qso_response_t *response) {
+    /* Defensive: a leftover pending must never survive into a new decision. */
+    pending_clear();
     init_response(rx_odd, response);
     if (!ctx || !ctx->local_callsign || ctx->local_callsign[0] == '\0' || !response) {
         return;
@@ -878,6 +953,8 @@ void ftx_qso_on_user_message(const ftx_qso_context_t *ctx,
             sticky_store(eval_text, snr, freq_hz);
         }
         copy_str(g_state.last_call, sizeof(g_state.last_call), cand.call);
+        /* Manual click = operator already authorized this peer. */
+        confirmed_insert(cand.call);
         emit_candidate(ctx, &cand, false, response);
     }
 
@@ -921,6 +998,49 @@ void ftx_qso_clear_decision_state(void) {
     g_state.last_call[0]   = '\0';
     g_state.blacklist_len  = 0;
     g_state.blacklist_next = 0;
+    pending_clear();
+    /* confirmed_calls intentionally kept across Auto/CQ/click restarts. */
 
     pthread_mutex_unlock(&engine_mutex);
+}
+
+bool ftx_qso_commit_pending(const ftx_qso_context_t *ctx,
+                            ftx_qso_response_t *response) {
+    if (!ctx || !response) return false;
+
+    pthread_mutex_lock(&engine_mutex);
+
+    if (!g_state.pending_valid) {
+        pthread_mutex_unlock(&engine_mutex);
+        return false;
+    }
+
+    Candidate cand = g_state.pending_cand;
+    bool tx_odd = g_state.pending_tx_odd;
+    pending_clear();
+
+    confirmed_insert(cand.call);
+    if (cand.order <= 2) {
+        blacklist_bump(cand.text);
+    }
+    copy_str(g_state.last_call, sizeof(g_state.last_call), cand.call);
+
+    init_response(!tx_odd, response);
+    emit_candidate(ctx, &cand, false, response);
+
+    pthread_mutex_unlock(&engine_mutex);
+    return response->action == FTX_QSO_ACTION_TX;
+}
+
+void ftx_qso_abort_pending(void) {
+    pthread_mutex_lock(&engine_mutex);
+    pending_clear();
+    pthread_mutex_unlock(&engine_mutex);
+}
+
+bool ftx_qso_pending_active(void) {
+    pthread_mutex_lock(&engine_mutex);
+    bool active = g_state.pending_valid;
+    pthread_mutex_unlock(&engine_mutex);
+    return active;
 }

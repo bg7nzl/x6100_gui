@@ -123,7 +123,11 @@ typedef struct {
  * response; any retry/repeat policy lives inside the engine.
  *
  * `save` is independent of `action`: a QSO can complete on a received
- * final 73 with no reply scheduled (action stays RX). */
+ * final 73 with no reply scheduled (action stays RX).
+ *
+ * `need_confirm`: Full/Pre auto picked an unconfirmed TX2 (PEER me GRID4).
+ * action stays RX; dialog prompts the operator, then calls
+ * ftx_qso_commit_pending() to bump blacklist and emit ACTION_TX. */
 typedef struct {
     ftx_qso_action_t action;
     bool  tx_odd;
@@ -133,6 +137,9 @@ typedef struct {
 
     bool             save;
     ftx_qso_record_t qso;
+
+    bool need_confirm;
+    char confirm_call[13];
 } ftx_qso_response_t;
 
 #ifdef __cplusplus
@@ -183,10 +190,25 @@ size_t ftx_qso_flush_complete(ftx_qso_record_t *records, size_t max);
 void ftx_qso_reset(void);
 
 /* Drop only the decision state (manual target + sticky, auto blacklist +
- * last-call). The peers ledger survives so an in-progress QSO can still be
- * logged. Call when the operating mode changes under the engine's feet:
- * CQ start, a user click, or an Auto mode switch. */
+ * last-call + pending TX2 confirm). The peers ledger and the session
+ * confirmed-calls set survive so an in-progress QSO can still be logged
+ * and already-approved peers are not re-prompted. Call when the operating
+ * mode changes under the engine's feet: CQ start, a user click, or an
+ * Auto mode switch. */
 void ftx_qso_clear_decision_state(void);
+
+/* Operator approved a pending auto TX2: insert call into the session
+ * confirmed set, blacklist_bump, update last_call, emit ACTION_TX into
+ * *response. Returns false when nothing is pending. */
+bool ftx_qso_commit_pending(const ftx_qso_context_t *ctx,
+                            ftx_qso_response_t *response);
+
+/* Discard a pending TX2 confirm without touching confirmed set or
+ * blacklist (timeout, Free MSG conflict, dialog close). */
+void ftx_qso_abort_pending(void);
+
+/* True while an auto TX2 is waiting for operator confirm. */
+bool ftx_qso_pending_active(void);
 
 #ifdef __cplusplus
 }

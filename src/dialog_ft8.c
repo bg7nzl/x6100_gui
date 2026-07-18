@@ -115,6 +115,12 @@ static ftx_tx_msg_t tx_msg;
  * (engine-external) keep the classic repeat-until-count behaviour instead. */
 static bool         tx_msg_oneshot;
 
+/* Auto TX2 confirm UI (Full/Pre first initiate). Armed from slot end;
+ * accepted via PTT / main VFO rotary; timed out from on_tick. */
+static bool     ui_confirm_pending = false;
+static bool     confirm_tx_odd     = false;
+static uint64_t confirm_deadline   = 0;
+
 #define DECODED_SLOT_MSG_MAX 100
 static ftx_decoded_msg_t decoded_slot_msgs[DECODED_SLOT_MSG_MAX];
 static char              decoded_slot_texts[DECODED_SLOT_MSG_MAX][64];
@@ -210,6 +216,11 @@ static void save_qso_record(const ftx_qso_record_t *rec);
 static size_t flush_unfinished_qsos(void);
 static ftx_qso_context_t qso_context(void);
 static void apply_qso_response(const ftx_qso_response_t *response, bool async_ui);
+static void confirm_dismiss(void);
+static void confirm_arm(const char *call, bool tx_odd, float tx_max_delay);
+static void confirm_accept(void);
+static void confirm_dismiss_cb(void *arg);
+static void confirm_dismiss_async(void);
 
 const char *auto_dnf_label_getter(void);
 static void auto_dnf_cb(struct button_data_t *btn_data);
@@ -368,6 +379,9 @@ static void worker_done() {
     tx_msg.force_free_text = false;
     tx_msg_oneshot = false;
     decoded_slot_msg_count = 0;
+    ftx_qso_abort_pending();
+    ui_confirm_pending = false;
+    confirm_deadline = 0;
 }
 
 /* Table widget lifecycle, draw, scroll and message insertion all live
@@ -810,6 +824,7 @@ static void qso_setting_changed(void) {
         tx_msg_oneshot = false;
     }
     ftx_qso_clear_decision_state();
+    confirm_dismiss();
 }
 
 static void mode_auto_cb(struct button_data_t *btn_data) {
@@ -1363,6 +1378,49 @@ static void decoded_slot_push(const char *text, int snr,
                  &decoded_slot_msgs[idx].grid_worked);
 }
 
+static void confirm_dismiss(void) {
+    ui_confirm_pending = false;
+    confirm_deadline   = 0;
+}
+
+static void confirm_dismiss_cb(void *arg) {
+    LV_UNUSED(arg);
+    confirm_dismiss();
+}
+
+static void confirm_dismiss_async(void) {
+    scheduler_put_noargs(confirm_dismiss_cb);
+}
+
+static void confirm_arm(const char *call, bool tx_odd, float tx_max_delay) {
+    ui_confirm_pending = true;
+    confirm_tx_odd     = tx_odd;
+    confirm_deadline   = get_time() + (uint64_t)(tx_max_delay * 1000.0f);
+    msg_schedule_long_text_fmt("TX2 %s? PTT/VFO=OK",
+                               (call && call[0]) ? call : "?");
+}
+
+static void confirm_accept(void) {
+    if (!ui_confirm_pending) return;
+
+    /* Same gate as arming: a TX Call pause flipped during the window must
+     * not be overridden by apply_qso_response re-enabling tx_enabled. */
+    if ((get_time() > confirm_deadline) || !subject_get_int(tx_enabled)) {
+        ftx_qso_abort_pending();
+        confirm_dismiss();
+        return;
+    }
+
+    ftx_qso_context_t  qctx = qso_context();
+    ftx_qso_response_t response;
+    if (!ftx_qso_commit_pending(&qctx, &response)) {
+        confirm_dismiss();
+        return;
+    }
+    confirm_dismiss();
+    apply_qso_response(&response, false);
+}
+
 static void apply_qso_response(const ftx_qso_response_t *response,
                                bool async_ui) {
     if (!response || response->action != FTX_QSO_ACTION_TX || response->tx_msg[0] == '\0') return;
@@ -1577,7 +1635,21 @@ static void on_slot_end_cb(const slot_info_t *info, void *ctx) {
          * A pending Free MSG wins its slot: the engine still ran above
          * (peers/save updated); only TX / CQ re-arm are deferred. */
         bool free_msg_pending = tx_msg.force_free_text && (tx_msg.msg[0] != '\0');
-        if ((response.action == FTX_QSO_ACTION_TX) && !free_msg_pending &&
+        float tx_max_delay = (subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8)
+                             ? MAX_TX_START_DELAY : MAX_TX_START_DELAY_FT4;
+        if (response.need_confirm) {
+            /* Free MSG owns the slot; TX Call Off must not be overridden by
+             * a later confirm_accept → apply_qso_response. */
+            if (free_msg_pending || !subject_get_int(tx_enabled)) {
+                ftx_qso_abort_pending();
+            } else {
+                confirm_arm(response.confirm_call, response.tx_odd, tx_max_delay);
+                if ((subject_get_int(cq_enabled) != CQ_OFF) &&
+                    (strncmp(tx_msg.msg, "CQ", 2) != 0)) {
+                    cq_rearm();
+                }
+            }
+        } else if ((response.action == FTX_QSO_ACTION_TX) && !free_msg_pending &&
             subject_get_int(tx_enabled)) {
             apply_qso_response(&response, true);
         } else if ((subject_get_int(cq_enabled) != CQ_OFF) && !free_msg_pending &&
@@ -1624,6 +1696,16 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
 
     float tx_max_delay = (subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8)
                          ? MAX_TX_START_DELAY : MAX_TX_START_DELAY_FT4;
+
+    /* TX2 confirm window: same clock as oneshot over-window. */
+    if (ui_confirm_pending && (info->odd == confirm_tx_odd) &&
+        (sec_since_slot_start >= tx_max_delay)) {
+        if (ftx_qso_pending_active()) {
+            ftx_qso_abort_pending();
+        }
+        confirm_dismiss_async();
+    }
+
     if ((sec_since_slot_start < tx_max_delay) && tx_slot_pending) {
         /* Module extension point: pre_tx
          * Thread: audio worker (on_tick_cb).
@@ -1924,6 +2006,21 @@ void ft8_band(int dir) {
     } else if (dir < 0) {
         lv_event_send(dialog.obj, EVENT_BAND_DOWN, NULL);
     }
+}
+
+bool ft8_consume_ptt(keypad_state_t state) {
+    if (!dialog_ft8 || !dialog_ft8->run) return false;
+    /* FT8 dialog open: swallow PTT entirely (no radio_set_ptt). */
+    if (ui_confirm_pending && (state == KEYPAD_PRESS)) {
+        confirm_accept();
+    }
+    return true;
+}
+
+bool ft8_confirm_consume_rotary(void) {
+    if (!dialog_ft8 || !dialog_ft8->run || !ui_confirm_pending) return false;
+    confirm_accept();
+    return true;
 }
 
 void ft8_get_filter_range(int *low_hz, int *high_hz) {
