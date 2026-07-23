@@ -71,6 +71,14 @@
 #define MAX_TX_START_DELAY     5.0f
 #define MAX_TX_START_DELAY_FT4 1.5f
 
+/* Small-scope full-auto: randomly auto-accept a pending TX2 before the
+ * TX start deadline, leaving this much margin for commit → apply → key.
+ * Set to 0 to restore manual-only (timeout still aborts). */
+#ifndef FT8_TX2_AUTO_CONFIRM
+#define FT8_TX2_AUTO_CONFIRM 0
+#endif
+#define FT8_TX2_AUTO_CONFIRM_MARGIN 0.5f
+
 #define FT8_FREETEXT_FILE        "/mnt/ft8_freetext.txt"
 #define FT8_FREETEXT_MAX_LEN     13
 #define FT8_FREETEXT_ACCEPTED_CHARS " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+-./?"
@@ -116,10 +124,14 @@ static ftx_tx_msg_t tx_msg;
 static bool         tx_msg_oneshot;
 
 /* Auto TX2 confirm UI (Full/Pre first initiate). Armed from slot end;
- * accepted via PTT / main VFO rotary; timed out from on_tick. */
+ * accepted via PTT / main VFO rotary (or FT8_TX2_AUTO_CONFIRM timer);
+ * timed out from on_tick. */
 static bool     ui_confirm_pending = false;
 static bool     confirm_tx_odd     = false;
 static uint64_t confirm_deadline   = 0;
+#if FT8_TX2_AUTO_CONFIRM
+static float    confirm_auto_at    = 0.0f; /* sec since TX-slot start */
+#endif
 
 /* NA VHF session CQ modifier: bypasses params (not persisted). Entering
  * NA VHF resets to "TEST"; edits while in contest stay here only. */
@@ -222,7 +234,7 @@ static ftx_qso_context_t qso_context(void);
 static void apply_qso_response(const ftx_qso_response_t *response, bool async_ui);
 static void confirm_dismiss(void);
 static void confirm_arm(const char *call, bool tx_odd, float tx_max_delay);
-static void confirm_accept(void);
+static void confirm_accept(bool async_ui);
 static void confirm_dismiss_cb(void *arg);
 static void confirm_dismiss_async(void);
 static bool processor_is_navhf(void);
@@ -388,6 +400,9 @@ static void worker_done() {
     ftx_qso_abort_pending();
     ui_confirm_pending = false;
     confirm_deadline = 0;
+#if FT8_TX2_AUTO_CONFIRM
+    confirm_auto_at = 0.0f;
+#endif
 }
 
 /* Table widget lifecycle, draw, scroll and message insertion all live
@@ -1398,6 +1413,9 @@ static void decoded_slot_push(const char *text, int snr,
 static void confirm_dismiss(void) {
     ui_confirm_pending = false;
     confirm_deadline   = 0;
+#if FT8_TX2_AUTO_CONFIRM
+    confirm_auto_at    = 0.0f;
+#endif
 }
 
 static void confirm_dismiss_cb(void *arg) {
@@ -1413,11 +1431,27 @@ static void confirm_arm(const char *call, bool tx_odd, float tx_max_delay) {
     ui_confirm_pending = true;
     confirm_tx_odd     = tx_odd;
     confirm_deadline   = get_time() + (uint64_t)(tx_max_delay * 1000.0f);
+#if FT8_TX2_AUTO_CONFIRM
+    {
+        float window = tx_max_delay - FT8_TX2_AUTO_CONFIRM_MARGIN;
+        if (window < 0.0f) {
+            window = 0.0f;
+        }
+        /* Uniform in [0, window]: leave margin so commit/apply still catch
+         * the oneshot TX gate in the same slot. */
+        confirm_auto_at = (window > 0.0f)
+            ? ((float)(rand() % 10001) / 10000.0f) * window
+            : 0.0f;
+    }
+    msg_schedule_long_text_fmt("TX2 %s…",
+                               (call && call[0]) ? call : "?");
+#else
     msg_schedule_long_text_fmt("TX2 %s? PTT/VFO=OK",
                                (call && call[0]) ? call : "?");
+#endif
 }
 
-static void confirm_accept(void) {
+static void confirm_accept(bool async_ui) {
     if (!ui_confirm_pending) return;
 
     /* Same gate as arming: a TX Call pause flipped during the window must
@@ -1435,7 +1469,7 @@ static void confirm_accept(void) {
         return;
     }
     confirm_dismiss();
-    apply_qso_response(&response, false);
+    apply_qso_response(&response, async_ui);
 }
 
 static void apply_qso_response(const ftx_qso_response_t *response,
@@ -1713,6 +1747,20 @@ static void on_tick_cb(const slot_info_t *info, bool new_slot,
 
     float tx_max_delay = (subject_get_int(cfg.ft8_protocol.val) == FTX_PROTOCOL_FT8)
                          ? MAX_TX_START_DELAY : MAX_TX_START_DELAY_FT4;
+
+#if FT8_TX2_AUTO_CONFIRM
+    /* Full-auto: randomly accept inside the TX start window (before the
+     * hard abort below). Same commit path as PTT/VFO. */
+    if (ui_confirm_pending && (info->odd == confirm_tx_odd) &&
+        (sec_since_slot_start < tx_max_delay) &&
+        (sec_since_slot_start >= confirm_auto_at)) {
+        confirm_accept(true);
+        have_tx_msg = tx_msg.msg[0] != '\0';
+        tx_enabled_now = subject_get_int(tx_enabled);
+        tx_slot_pending = have_tx_msg && tx_enabled_now &&
+                          (tx_time_slot == info->odd);
+    }
+#endif
 
     /* TX2 confirm window: same clock as oneshot over-window. */
     if (ui_confirm_pending && (info->odd == confirm_tx_odd) &&
@@ -2035,14 +2083,14 @@ bool ft8_consume_ptt(keypad_state_t state) {
     if (!dialog_ft8 || !dialog_ft8->run) return false;
     /* FT8 dialog open: swallow PTT entirely (no radio_set_ptt). */
     if (ui_confirm_pending && (state == KEYPAD_PRESS)) {
-        confirm_accept();
+        confirm_accept(false);
     }
     return true;
 }
 
 bool ft8_confirm_consume_rotary(void) {
     if (!dialog_ft8 || !dialog_ft8->run || !ui_confirm_pending) return false;
-    confirm_accept();
+    confirm_accept(false);
     return true;
 }
 
